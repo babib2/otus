@@ -372,3 +372,5 @@ log/
 local/php_interface/vendor
 __codex_local_auth.php
 bitrix.partial-backup-*/
+CHAT_ACTIONS.md
+.agents/skills/
