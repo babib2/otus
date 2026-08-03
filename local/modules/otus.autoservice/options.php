@@ -1,0 +1,157 @@
+<?php
+
+/**
+ * Выводит и сохраняет основные настройки модуля в административной части Bitrix.
+ */
+
+declare(strict_types=1);
+
+use Bitrix\Main\Config\Option;
+use Bitrix\Main\Context;
+use Bitrix\Main\Loader;
+use Bitrix\Main\Localization\Loc;
+use Otus\Autoservice\Service\ModuleConfiguration;
+
+Loc::loadMessages(__FILE__);
+
+/** @var CMain $APPLICATION Глобальный объект административного приложения Bitrix. */
+/** @var CUser $USER Текущий пользователь административного раздела. */
+global $APPLICATION, $USER;
+
+/** @var string $moduleId Системный идентификатор, используемый при чтении прав и настроек. */
+$moduleId = 'otus.autoservice';
+
+if (!Loader::includeModule($moduleId)) {
+    CAdminMessage::ShowMessage(
+        (string)Loc::getMessage('OTUS_AUTOSERVICE_OPTIONS_MODULE_NOT_LOADED')
+    );
+
+    return;
+}
+
+if (!$USER->IsAdmin() && $APPLICATION->GetGroupRight($moduleId) < 'W') {
+    $APPLICATION->AuthForm((string)Loc::getMessage('OTUS_AUTOSERVICE_OPTIONS_ACCESS_DENIED'));
+}
+
+/** @var \Bitrix\Main\HttpRequest $request Текущий HTTP-запрос страницы настроек. */
+$request = Context::getCurrent()->getRequest();
+
+/** @var bool $saved Нужно ли показать уведомление об успешном изменении настроек. */
+$saved = false;
+
+// Изменения принимаются только POST-запросом с действительным идентификатором сессии.
+if ($request->isPost() && check_bitrix_sessid()) {
+    if ($request->getPost('RestoreDefaults') !== null) {
+        Option::delete($moduleId);
+        $saved = true;
+    } elseif (
+        $request->getPost('Update') !== null
+        || $request->getPost('Apply') !== null
+    ) {
+        /** @var string $enabled Нормализованный флаг включения: только `Y` или `N`. */
+        $enabled = $request->getPost(ModuleConfiguration::OPTION_ENABLED) === 'Y'
+            ? 'Y'
+            : 'N';
+
+        /** @var string $logLevel Запрошенный уровень журналирования до проверки белого списка. */
+        $logLevel = (string)$request->getPost(ModuleConfiguration::OPTION_LOG_LEVEL);
+
+        if (!in_array($logLevel, ModuleConfiguration::getAllowedLogLevels(), true)) {
+            $logLevel = 'error';
+        }
+
+        Option::set($moduleId, ModuleConfiguration::OPTION_ENABLED, $enabled);
+        Option::set($moduleId, ModuleConfiguration::OPTION_LOG_LEVEL, $logLevel);
+        $saved = true;
+    }
+}
+
+if ($saved) {
+    CAdminMessage::ShowNote((string)Loc::getMessage('OTUS_AUTOSERVICE_OPTIONS_SAVED'));
+}
+
+/**
+ * @var array<int, array{DIV: string, TAB: string, TITLE: string}> $tabs
+ * Конфигурация вкладок, передаваемая стандартному CAdminTabControl.
+ */
+$tabs = [
+    [
+        'DIV' => 'otus_autoservice_main',
+        'TAB' => Loc::getMessage('OTUS_AUTOSERVICE_OPTIONS_TAB'),
+        'TITLE' => Loc::getMessage('OTUS_AUTOSERVICE_OPTIONS_TAB_TITLE'),
+    ],
+];
+/** @var CAdminTabControl $tabControl Объект, формирующий стандартную вкладку настроек. */
+$tabControl = new CAdminTabControl('otusAutoserviceOptions', $tabs);
+
+/** @var bool $enabled Текущее сохранённое состояние прикладной логики. */
+$enabled = ModuleConfiguration::isEnabled();
+
+/** @var string $logLevel Текущий проверенный уровень журналирования. */
+$logLevel = ModuleConfiguration::getLogLevel();
+?>
+<form method="post" action="<?=htmlspecialcharsbx($APPLICATION->GetCurPage())?>?mid=<?=urlencode($moduleId)?>&amp;lang=<?=urlencode(LANGUAGE_ID)?>">
+    <?php $tabControl->Begin(); ?>
+    <?php $tabControl->BeginNextTab(); ?>
+    <tr>
+        <td width="40%">
+            <label for="otus-autoservice-enabled">
+                <?=htmlspecialcharsbx((string)Loc::getMessage('OTUS_AUTOSERVICE_OPTIONS_ENABLED'))?>
+            </label>
+        </td>
+        <td width="60%">
+            <input
+                id="otus-autoservice-enabled"
+                type="checkbox"
+                name="<?=htmlspecialcharsbx(ModuleConfiguration::OPTION_ENABLED)?>"
+                value="Y"
+                <?=$enabled ? 'checked' : ''?>
+            >
+        </td>
+    </tr>
+    <tr>
+        <td width="40%">
+            <label for="otus-autoservice-log-level">
+                <?=htmlspecialcharsbx((string)Loc::getMessage('OTUS_AUTOSERVICE_OPTIONS_LOG_LEVEL'))?>
+            </label>
+        </td>
+        <td width="60%">
+            <select
+                id="otus-autoservice-log-level"
+                name="<?=htmlspecialcharsbx(ModuleConfiguration::OPTION_LOG_LEVEL)?>"
+            >
+                <?php /** @var string $allowedLogLevel Допустимое значение очередного пункта списка. */ ?>
+                <?php foreach (ModuleConfiguration::getAllowedLogLevels() as $allowedLogLevel): ?>
+                    <option
+                        value="<?=htmlspecialcharsbx($allowedLogLevel)?>"
+                        <?=$allowedLogLevel === $logLevel ? 'selected' : ''?>
+                    >
+                        <?=htmlspecialcharsbx((string)Loc::getMessage(
+                            'OTUS_AUTOSERVICE_OPTIONS_LOG_LEVEL_' . strtoupper($allowedLogLevel)
+                        ))?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
+        </td>
+    </tr>
+    <?php $tabControl->Buttons(); ?>
+    <input
+        type="submit"
+        name="Update"
+        value="<?=htmlspecialcharsbx((string)Loc::getMessage('OTUS_AUTOSERVICE_OPTIONS_SAVE'))?>"
+        class="adm-btn-save"
+    >
+    <input
+        type="submit"
+        name="Apply"
+        value="<?=htmlspecialcharsbx((string)Loc::getMessage('OTUS_AUTOSERVICE_OPTIONS_APPLY'))?>"
+    >
+    <input
+        type="submit"
+        name="RestoreDefaults"
+        value="<?=htmlspecialcharsbx((string)Loc::getMessage('OTUS_AUTOSERVICE_OPTIONS_DEFAULTS'))?>"
+        onclick="return confirm('<?=CUtil::JSEscape((string)Loc::getMessage('OTUS_AUTOSERVICE_OPTIONS_DEFAULTS_CONFIRM'))?>');"
+    >
+    <?=bitrix_sessid_post()?>
+    <?php $tabControl->End(); ?>
+</form>
