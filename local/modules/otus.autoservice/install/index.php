@@ -16,6 +16,8 @@ use Otus\Autoservice\Service\ModuleRequirements;
 
 Loc::loadMessages(__FILE__);
 
+// Регистрирует классы миграций и ORM до первого InstallDB() нового модуля.
+require_once dirname(__DIR__) . '/include.php';
 require_once dirname(__DIR__) . '/lib/EventHandler/EventRegistry.php';
 require_once dirname(__DIR__) . '/lib/Migration/MigrationInterface.php';
 require_once dirname(__DIR__) . '/lib/Migration/MigrationManager.php';

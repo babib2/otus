@@ -28,7 +28,9 @@ final class MigrationManager
      *
      * @var class-string<MigrationInterface>[]
      */
-    private const MIGRATION_CLASSES = [];
+    private const MIGRATION_CLASSES = [
+        Version202608050001CreateCarTable::class,
+    ];
 
     /**
      * Применяет все миграции новее сохранённой версии схемы.
@@ -105,6 +107,35 @@ final class MigrationManager
     }
 
     /**
+     * Возвращает самую новую версию, известную текущему коду модуля.
+     *
+     * @return string Версия последней миграции либо `0`, если реестр пуст.
+     */
+    public static function getLatestVersion(): string
+    {
+        /** @var MigrationInterface[] $migrations Зарегистрированные миграции по возрастанию. */
+        $migrations = self::createMigrations();
+
+        if ($migrations === []) {
+            return '0';
+        }
+
+        return $migrations[count($migrations) - 1]->getVersion();
+    }
+
+    /**
+     * Проверяет, остались ли неприменённые миграции.
+     */
+    public static function hasPendingMigrations(): bool
+    {
+        return version_compare(
+            self::getLatestVersion(),
+            self::getCurrentVersion(),
+            '>'
+        );
+    }
+
+    /**
      * Создаёт и сортирует объекты зарегистрированных миграций.
      *
      * @return MigrationInterface[]
@@ -137,6 +168,21 @@ final class MigrationManager
                 return version_compare($left->getVersion(), $right->getVersion());
             }
         );
+
+        /** @var array<string, bool> $usedVersions Версии, уже встреченные в реестре. */
+        $usedVersions = [];
+
+        foreach ($migrations as $migration) {
+            /** @var string $version Проверяемая уникальная версия миграции. */
+            $version = $migration->getVersion();
+            if (isset($usedVersions[$version])) {
+                throw new LogicException(
+                    sprintf('Duplicate migration version: %s.', $version)
+                );
+            }
+
+            $usedVersions[$version] = true;
+        }
 
         return $migrations;
     }

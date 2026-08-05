@@ -6,9 +6,11 @@
 
 declare(strict_types=1);
 
+use Bitrix\Main\Context;
 use Bitrix\Main\Loader;
 use Bitrix\Main\Localization\Loc;
 use Bitrix\Main\ModuleManager;
+use Otus\Autoservice\Migration\MigrationManager;
 use Otus\Autoservice\Service\ModuleConfiguration;
 use Otus\Autoservice\Service\ModuleRequirements;
 
@@ -23,7 +25,10 @@ global $APPLICATION;
 $moduleId = 'otus.autoservice';
 $APPLICATION->SetTitle((string)Loc::getMessage('OTUS_AUTOSERVICE_STATUS_TITLE'));
 
-if ($APPLICATION->GetGroupRight($moduleId) < 'R') {
+/** @var string $moduleRight Право текущего пользователя на модуль. */
+$moduleRight = $APPLICATION->GetGroupRight($moduleId);
+
+if ($moduleRight < 'R') {
     $APPLICATION->AuthForm((string)Loc::getMessage('OTUS_AUTOSERVICE_ACCESS_DENIED'));
 }
 
@@ -42,10 +47,57 @@ if (!$moduleLoaded) {
     return;
 }
 
+/** @var \Bitrix\Main\HttpRequest $request Текущий запрос диагностической страницы. */
+$request = Context::getCurrent()->getRequest();
+
+/** @var array<string, string>|null $migrationMessage Сообщение о результате запуска миграций. */
+$migrationMessage = null;
+
+if ($request->isPost() && $request->getPost('apply_migrations') === 'Y') {
+    if ($moduleRight < 'W') {
+        $migrationMessage = [
+            'MESSAGE' => (string)Loc::getMessage('OTUS_AUTOSERVICE_STATUS_MIGRATION_ACCESS_DENIED'),
+            'TYPE' => 'ERROR',
+        ];
+    } elseif (!check_bitrix_sessid()) {
+        $migrationMessage = [
+            'MESSAGE' => (string)Loc::getMessage('OTUS_AUTOSERVICE_STATUS_INVALID_SESSION'),
+            'TYPE' => 'ERROR',
+        ];
+    } else {
+        try {
+            MigrationManager::migrate();
+            $migrationMessage = [
+                'MESSAGE' => (string)Loc::getMessage('OTUS_AUTOSERVICE_STATUS_MIGRATION_SUCCESS'),
+                'TYPE' => 'OK',
+            ];
+        } catch (Throwable $exception) {
+            $migrationMessage = [
+                'MESSAGE' => (string)Loc::getMessage('OTUS_AUTOSERVICE_STATUS_MIGRATION_ERROR'),
+                'DETAILS' => htmlspecialcharsbx($exception->getMessage()),
+                'TYPE' => 'ERROR',
+            ];
+        }
+    }
+}
+
 /** @var string[] $requiredModules Идентификаторы зависимостей для таблицы состояния. */
 $requiredModules = ModuleRequirements::getRequiredModules();
+
+/** @var string $currentSchemaVersion Последняя успешно применённая миграция. */
+$currentSchemaVersion = MigrationManager::getCurrentVersion();
+
+/** @var string $latestSchemaVersion Последняя миграция, известная текущему коду. */
+$latestSchemaVersion = MigrationManager::getLatestVersion();
+
+/** @var bool $hasPendingMigrations Есть ли изменения схемы, ожидающие применения. */
+$hasPendingMigrations = MigrationManager::hasPendingMigrations();
 ?>
 <div class="adm-detail-content-wrap">
+    <?php if ($migrationMessage !== null): ?>
+        <?php CAdminMessage::ShowMessage($migrationMessage); ?>
+    <?php endif; ?>
+
     <div class="adm-detail-content">
         <div class="adm-detail-title">
             <?=htmlspecialcharsbx((string)Loc::getMessage('OTUS_AUTOSERVICE_STATUS_SUMMARY'))?>
@@ -80,8 +132,39 @@ $requiredModules = ModuleRequirements::getRequiredModules();
                         <?=htmlspecialcharsbx(ModuleConfiguration::getLogLevel())?>
                     </td>
                 </tr>
+                <tr>
+                    <td class="adm-detail-content-cell-l">
+                        <?=htmlspecialcharsbx((string)Loc::getMessage('OTUS_AUTOSERVICE_STATUS_SCHEMA_VERSION'))?>
+                    </td>
+                    <td class="adm-detail-content-cell-r">
+                        <?=htmlspecialcharsbx($currentSchemaVersion)?>
+                    </td>
+                </tr>
+                <tr>
+                    <td class="adm-detail-content-cell-l">
+                        <?=htmlspecialcharsbx((string)Loc::getMessage('OTUS_AUTOSERVICE_STATUS_LATEST_SCHEMA_VERSION'))?>
+                    </td>
+                    <td class="adm-detail-content-cell-r">
+                        <?=htmlspecialcharsbx($latestSchemaVersion)?>
+                        — <?=$hasPendingMigrations
+                            ? htmlspecialcharsbx((string)Loc::getMessage('OTUS_AUTOSERVICE_STATUS_MIGRATIONS_PENDING'))
+                            : htmlspecialcharsbx((string)Loc::getMessage('OTUS_AUTOSERVICE_STATUS_MIGRATIONS_ACTUAL'))?>
+                    </td>
+                </tr>
                 </tbody>
             </table>
+
+            <?php if ($hasPendingMigrations && $moduleRight >= 'W'): ?>
+                <form method="post" action="<?=htmlspecialcharsbx($APPLICATION->GetCurPageParam('', []))?>">
+                    <?=bitrix_sessid_post()?>
+                    <input type="hidden" name="apply_migrations" value="Y">
+                    <input
+                        type="submit"
+                        class="adm-btn-save"
+                        value="<?=htmlspecialcharsbx((string)Loc::getMessage('OTUS_AUTOSERVICE_STATUS_APPLY_MIGRATIONS'))?>"
+                    >
+                </form>
+            <?php endif; ?>
         </div>
     </div>
 

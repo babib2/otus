@@ -19,6 +19,10 @@ Loader::registerAutoLoadClasses(
         'Otus\\Autoservice\\EventHandler\\EventRegistry' => 'lib/EventHandler/EventRegistry.php',
         'Otus\\Autoservice\\Migration\\MigrationInterface' => 'lib/Migration/MigrationInterface.php',
         'Otus\\Autoservice\\Migration\\MigrationManager' => 'lib/Migration/MigrationManager.php',
+        'Otus\\Autoservice\\Migration\\Version202608050001CreateCarTable' => 'lib/Migration/Version202608050001CreateCarTable.php',
+        'Otus\\Autoservice\\Model\\CarTable' => 'lib/Model/CarTable.php',
+        'Otus\\Autoservice\\Repository\\CarRepository' => 'lib/Repository/CarRepository.php',
+        'Otus\\Autoservice\\Service\\CarService' => 'lib/Service/CarService.php',
         'Otus\\Autoservice\\Service\\ModuleConfiguration' => 'lib/Service/ModuleConfiguration.php',
         'Otus\\Autoservice\\Service\\ModuleRequirements' => 'lib/Service/ModuleRequirements.php',
     ]
