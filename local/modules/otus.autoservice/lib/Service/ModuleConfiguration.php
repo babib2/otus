@@ -31,6 +31,34 @@ final class ModuleConfiguration
     public const OPTION_LOG_LEVEL = 'log_level';
 
     /**
+     * Имя настройки с идентификатором направления сервисных CRM-сделок.
+     *
+     * Пустое значение означает, что администратор ещё не выбрал воронку и
+     * обработчики сделок должны завершаться без применения ограничений.
+     */
+    public const OPTION_SERVICE_DEAL_CATEGORY_ID = 'service_deal_category_id';
+
+    /**
+     * Имя технической настройки с кодом поля автомобиля в CRM-сделке.
+     */
+    public const OPTION_DEAL_CAR_FIELD_NAME = 'deal_car_field_name';
+
+    /**
+     * Имя технической настройки с ID пользовательского поля, созданного модулем.
+     */
+    public const OPTION_DEAL_CAR_FIELD_ID = 'deal_car_field_id';
+
+    /**
+     * Флаг владения пользовательским полем: `Y`, если поле создал модуль.
+     */
+    public const OPTION_DEAL_CAR_FIELD_OWNED = 'deal_car_field_owned';
+
+    /**
+     * Стабильный код поля связи CRM-сделки с автомобилем из ORM-таблицы.
+     */
+    public const DEFAULT_DEAL_CAR_FIELD_NAME = 'UF_CRM_OTUS_CAR_ID';
+
+    /**
      * Уровень журналирования, используемый до первого сохранения настроек.
      */
     private const DEFAULT_LOG_LEVEL = 'error';
@@ -79,6 +107,52 @@ final class ModuleConfiguration
         }
 
         return $logLevel;
+    }
+
+    /**
+     * Возвращает выбранное направление сервисных сделок.
+     *
+     * Нулевой ID является допустимым идентификатором основной воронки Bitrix,
+     * поэтому отсутствие настройки представлено именно значением null.
+     *
+     * @return int|null ID направления либо null, если настройка ещё не задана.
+     */
+    public static function getServiceDealCategoryId(): ?int
+    {
+        /** @var string $categoryId Сырое значение настройки направления. */
+        $categoryId = Option::get(
+            self::MODULE_ID,
+            self::OPTION_SERVICE_DEAL_CATEGORY_ID,
+            ''
+        );
+
+        if ($categoryId === '' || preg_match('/^\d+$/', $categoryId) !== 1) {
+            return null;
+        }
+
+        return (int)$categoryId;
+    }
+
+    /**
+     * Возвращает проверенный код поля автомобиля в CRM-сделке.
+     *
+     * Если техническая настройка повреждена, используется стабильный код по
+     * умолчанию. Это не позволяет обработчику обратиться к произвольной колонке.
+     */
+    public static function getDealCarFieldName(): string
+    {
+        /** @var string $fieldName Код поля, сохранённый миграцией модуля. */
+        $fieldName = Option::get(
+            self::MODULE_ID,
+            self::OPTION_DEAL_CAR_FIELD_NAME,
+            self::DEFAULT_DEAL_CAR_FIELD_NAME
+        );
+
+        if (preg_match('/^UF_CRM_[A-Z0-9_]+$/', $fieldName) !== 1) {
+            return self::DEFAULT_DEAL_CAR_FIELD_NAME;
+        }
+
+        return $fieldName;
     }
 
     /**

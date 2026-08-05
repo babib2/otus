@@ -30,6 +30,7 @@ final class MigrationManager
      */
     private const MIGRATION_CLASSES = [
         Version202608050001CreateCarTable::class,
+        Version202608050002CreateDealCarField::class,
     ];
 
     /**
@@ -45,7 +46,7 @@ final class MigrationManager
 
         /** @var MigrationInterface $migration Очередная миграция в прямом порядке. */
         foreach (self::createMigrations() as $migration) {
-            if (version_compare($migration->getVersion(), $currentVersion, '<=')) {
+            if (self::compareVersions($migration->getVersion(), $currentVersion) <= 0) {
                 continue;
             }
 
@@ -73,7 +74,7 @@ final class MigrationManager
         for ($index = count($migrations) - 1; $index >= 0; --$index) {
             /** @var MigrationInterface $migration Миграция, откатываемая на текущем шаге. */
             $migration = $migrations[$index];
-            if (version_compare($migration->getVersion(), $currentVersion, '>')) {
+            if (self::compareVersions($migration->getVersion(), $currentVersion) > 0) {
                 continue;
             }
 
@@ -128,11 +129,10 @@ final class MigrationManager
      */
     public static function hasPendingMigrations(): bool
     {
-        return version_compare(
+        return self::compareVersions(
             self::getLatestVersion(),
-            self::getCurrentVersion(),
-            '>'
-        );
+            self::getCurrentVersion()
+        ) > 0;
     }
 
     /**
@@ -165,7 +165,7 @@ final class MigrationManager
         usort(
             $migrations,
             static function (MigrationInterface $left, MigrationInterface $right): int {
-                return version_compare($left->getVersion(), $right->getVersion());
+                return self::compareVersions($left->getVersion(), $right->getVersion());
             }
         );
 
@@ -185,6 +185,38 @@ final class MigrationManager
         }
 
         return $migrations;
+    }
+
+    /**
+     * Сравнивает версии миграций без потери точности длинных цифровых строк.
+     *
+     * version_compare() в некоторых сборках PHP считает двенадцатизначные
+     * версии YYYYMMDDNNNN равными. Для полностью цифровых значений сначала
+     * сравнивается длина, затем выполняется лексикографическое сравнение.
+     * Обычные версии с точками и суффиксами сохраняют стандартную семантику PHP.
+     *
+     * @return int Отрицательное число, ноль или положительное число.
+     */
+    private static function compareVersions(string $left, string $right): int
+    {
+        if (ctype_digit($left) && ctype_digit($right)) {
+            /** @var string $normalizedLeft Левая версия без незначащих ведущих нулей. */
+            $normalizedLeft = ltrim($left, '0');
+
+            /** @var string $normalizedRight Правая версия без незначащих ведущих нулей. */
+            $normalizedRight = ltrim($right, '0');
+
+            $normalizedLeft = $normalizedLeft === '' ? '0' : $normalizedLeft;
+            $normalizedRight = $normalizedRight === '' ? '0' : $normalizedRight;
+
+            if (strlen($normalizedLeft) !== strlen($normalizedRight)) {
+                return strlen($normalizedLeft) <=> strlen($normalizedRight);
+            }
+
+            return strcmp($normalizedLeft, $normalizedRight);
+        }
+
+        return version_compare($left, $right);
     }
 
     /**

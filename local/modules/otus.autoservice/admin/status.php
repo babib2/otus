@@ -10,6 +10,7 @@ use Bitrix\Main\Context;
 use Bitrix\Main\Loader;
 use Bitrix\Main\Localization\Loc;
 use Bitrix\Main\ModuleManager;
+use Otus\Autoservice\Integration\Crm\DealCarFieldManager;
 use Otus\Autoservice\Migration\MigrationManager;
 use Otus\Autoservice\Service\ModuleConfiguration;
 use Otus\Autoservice\Service\ModuleRequirements;
@@ -92,6 +93,15 @@ $latestSchemaVersion = MigrationManager::getLatestVersion();
 
 /** @var bool $hasPendingMigrations Есть ли изменения схемы, ожидающие применения. */
 $hasPendingMigrations = MigrationManager::hasPendingMigrations();
+
+/** @var int|null $serviceCategoryId Выбранное направление сервисного обслуживания. */
+$serviceCategoryId = ModuleConfiguration::getServiceDealCategoryId();
+
+/** @var string $dealCarFieldName Код связи CRM-сделки с автомобилем. */
+$dealCarFieldName = ModuleConfiguration::getDealCarFieldName();
+
+/** @var bool $dealCarFieldExists Создано ли совместимое поле автомобиля в CRM. */
+$dealCarFieldExists = (new DealCarFieldManager())->exists();
 ?>
 <div class="adm-detail-content-wrap">
     <?php if ($migrationMessage !== null): ?>
@@ -149,6 +159,37 @@ $hasPendingMigrations = MigrationManager::hasPendingMigrations();
                         — <?=$hasPendingMigrations
                             ? htmlspecialcharsbx((string)Loc::getMessage('OTUS_AUTOSERVICE_STATUS_MIGRATIONS_PENDING'))
                             : htmlspecialcharsbx((string)Loc::getMessage('OTUS_AUTOSERVICE_STATUS_MIGRATIONS_ACTUAL'))?>
+                    </td>
+                </tr>
+                <tr>
+                    <td class="adm-detail-content-cell-l">
+                        <?=htmlspecialcharsbx((string)Loc::getMessage(
+                            'OTUS_AUTOSERVICE_STATUS_SERVICE_CATEGORY'
+                        ))?>
+                    </td>
+                    <td class="adm-detail-content-cell-r">
+                        <?=$serviceCategoryId === null
+                            ? htmlspecialcharsbx((string)Loc::getMessage(
+                                'OTUS_AUTOSERVICE_STATUS_NOT_CONFIGURED'
+                            ))
+                            : 'ID: ' . $serviceCategoryId?>
+                    </td>
+                </tr>
+                <tr>
+                    <td class="adm-detail-content-cell-l">
+                        <?=htmlspecialcharsbx((string)Loc::getMessage(
+                            'OTUS_AUTOSERVICE_STATUS_DEAL_CAR_FIELD'
+                        ))?>
+                    </td>
+                    <td class="adm-detail-content-cell-r">
+                        <?=htmlspecialcharsbx($dealCarFieldName)?>
+                        — <?=$dealCarFieldExists
+                            ? htmlspecialcharsbx((string)Loc::getMessage(
+                                'OTUS_AUTOSERVICE_STATUS_FIELD_EXISTS'
+                            ))
+                            : htmlspecialcharsbx((string)Loc::getMessage(
+                                'OTUS_AUTOSERVICE_STATUS_FIELD_MISSING'
+                            ))?>
                     </td>
                 </tr>
                 </tbody>

@@ -29,13 +29,29 @@ final class EventRegistry
      *     sort?: int
      * }>
      */
-    private const EVENTS = [];
+    private const EVENTS = [
+        [
+            'from_module' => 'crm',
+            'event' => 'OnBeforeCrmDealAdd',
+            'class' => DealValidationHandler::class,
+            'method' => 'onBeforeAdd',
+            'sort' => 50,
+        ],
+        [
+            'from_module' => 'crm',
+            'event' => 'OnBeforeCrmDealUpdate',
+            'class' => DealValidationHandler::class,
+            'method' => 'onBeforeUpdate',
+            'sort' => 50,
+        ],
+    ];
 
     /**
      * Регистрирует все обработчики модуля в Bitrix.
      *
-     * Повторное выполнение должно происходить только через штатный установщик,
-     * чтобы в таблице зависимостей событий не появлялись лишние записи.
+     * Штатный EventManager формирует уникальный ключ регистрации и использует
+     * INSERT IGNORE, поэтому метод безопасно вызывается как при новой установке,
+     * так и из миграции уже установленного модуля.
      */
     public static function install(): void
     {

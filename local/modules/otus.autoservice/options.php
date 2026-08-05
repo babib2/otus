@@ -6,6 +6,7 @@
 
 declare(strict_types=1);
 
+use Bitrix\Crm\Category\DealCategory;
 use Bitrix\Main\Config\Option;
 use Bitrix\Main\Context;
 use Bitrix\Main\Loader;
@@ -39,10 +40,28 @@ $request = Context::getCurrent()->getRequest();
 /** @var bool $saved Нужно ли показать уведомление об успешном изменении настроек. */
 $saved = false;
 
+/** @var string[] $optionErrors Ошибки проверки административной формы. */
+$optionErrors = [];
+
+/** @var array<int, array<string, mixed>> $dealCategories Доступные направления CRM-сделок. */
+$dealCategories = Loader::includeModule('crm')
+    ? DealCategory::getAll(true)
+    : [];
+
 // Изменения принимаются только POST-запросом с действительным идентификатором сессии.
 if ($request->isPost() && check_bitrix_sessid()) {
     if ($request->getPost('RestoreDefaults') !== null) {
-        Option::delete($moduleId);
+        // Сброс формы не затрагивает версию схемы и признаки владения CRM-полем.
+        foreach (
+            [
+                ModuleConfiguration::OPTION_ENABLED,
+                ModuleConfiguration::OPTION_LOG_LEVEL,
+                ModuleConfiguration::OPTION_SERVICE_DEAL_CATEGORY_ID,
+            ] as $optionName
+        ) {
+            /** @var string $optionName Очередная пользовательская настройка для сброса. */
+            Option::delete($moduleId, ['name' => $optionName]);
+        }
         $saved = true;
     } elseif (
         $request->getPost('Update') !== null
@@ -60,14 +79,60 @@ if ($request->isPost() && check_bitrix_sessid()) {
             $logLevel = 'error';
         }
 
-        Option::set($moduleId, ModuleConfiguration::OPTION_ENABLED, $enabled);
-        Option::set($moduleId, ModuleConfiguration::OPTION_LOG_LEVEL, $logLevel);
-        $saved = true;
+        /** @var string $categoryIdValue ID выбранного направления либо пустая строка. */
+        $categoryIdValue = trim(
+            (string)$request->getPost(ModuleConfiguration::OPTION_SERVICE_DEAL_CATEGORY_ID)
+        );
+
+        /** @var int[] $availableCategoryIds Белый список ID из штатного CRM API. */
+        $availableCategoryIds = array_map(
+            static function (array $category): int {
+                return (int)$category['ID'];
+            },
+            $dealCategories
+        );
+
+        if (
+            $categoryIdValue !== ''
+            && (
+                preg_match('/^\d+$/', $categoryIdValue) !== 1
+                || !in_array((int)$categoryIdValue, $availableCategoryIds, true)
+            )
+        ) {
+            $optionErrors[] = (string)Loc::getMessage(
+                'OTUS_AUTOSERVICE_OPTIONS_SERVICE_CATEGORY_INVALID'
+            );
+        }
+
+        if ($optionErrors === []) {
+            Option::set($moduleId, ModuleConfiguration::OPTION_ENABLED, $enabled);
+            Option::set($moduleId, ModuleConfiguration::OPTION_LOG_LEVEL, $logLevel);
+
+            if ($categoryIdValue === '') {
+                Option::delete(
+                    $moduleId,
+                    ['name' => ModuleConfiguration::OPTION_SERVICE_DEAL_CATEGORY_ID]
+                );
+            } else {
+                Option::set(
+                    $moduleId,
+                    ModuleConfiguration::OPTION_SERVICE_DEAL_CATEGORY_ID,
+                    $categoryIdValue
+                );
+            }
+
+            $saved = true;
+        }
     }
 }
 
 if ($saved) {
     CAdminMessage::ShowNote((string)Loc::getMessage('OTUS_AUTOSERVICE_OPTIONS_SAVED'));
+}
+
+/** @var string $optionError Очередная ошибка формы, показываемая администратору. */
+foreach ($optionErrors as $optionError) {
+    CAdminMessage::ShowMessage($optionError);
 }
 
 /**
@@ -89,6 +154,12 @@ $enabled = ModuleConfiguration::isEnabled();
 
 /** @var string $logLevel Текущий проверенный уровень журналирования. */
 $logLevel = ModuleConfiguration::getLogLevel();
+
+/** @var int|null $serviceCategoryId Выбранное направление сервисного обслуживания. */
+$serviceCategoryId = ModuleConfiguration::getServiceDealCategoryId();
+
+/** @var string $dealCarFieldName Технический код поля связи сделки с автомобилем. */
+$dealCarFieldName = ModuleConfiguration::getDealCarFieldName();
 ?>
 <form method="post" action="<?=htmlspecialcharsbx($APPLICATION->GetCurPage())?>?mid=<?=urlencode($moduleId)?>&amp;lang=<?=urlencode(LANGUAGE_ID)?>">
     <?php $tabControl->Begin(); ?>
@@ -132,6 +203,64 @@ $logLevel = ModuleConfiguration::getLogLevel();
                     </option>
                 <?php endforeach; ?>
             </select>
+        </td>
+    </tr>
+    <tr>
+        <td width="40%">
+            <label for="otus-autoservice-service-category">
+                <?=htmlspecialcharsbx((string)Loc::getMessage(
+                    'OTUS_AUTOSERVICE_OPTIONS_SERVICE_CATEGORY'
+                ))?>
+            </label>
+        </td>
+        <td width="60%">
+            <select
+                id="otus-autoservice-service-category"
+                name="<?=htmlspecialcharsbx(ModuleConfiguration::OPTION_SERVICE_DEAL_CATEGORY_ID)?>"
+            >
+                <option value="">
+                    <?=htmlspecialcharsbx((string)Loc::getMessage(
+                        'OTUS_AUTOSERVICE_OPTIONS_SERVICE_CATEGORY_NOT_SELECTED'
+                    ))?>
+                </option>
+                <?php /** @var array<string, mixed> $dealCategory Очередное направление CRM. */ ?>
+                <?php foreach ($dealCategories as $dealCategory): ?>
+                    <?php /** @var int $dealCategoryId Числовой ID направления из CRM API. */ ?>
+                    <?php $dealCategoryId = (int)$dealCategory['ID']; ?>
+                    <option
+                        value="<?=$dealCategoryId?>"
+                        <?=$serviceCategoryId === $dealCategoryId ? 'selected' : ''?>
+                    >
+                        <?=htmlspecialcharsbx((string)$dealCategory['NAME'])?>
+                        (ID: <?=$dealCategoryId?>)
+                    </option>
+                <?php endforeach; ?>
+            </select>
+            <div class="adm-info-message-wrap">
+                <?=htmlspecialcharsbx((string)Loc::getMessage(
+                    'OTUS_AUTOSERVICE_OPTIONS_SERVICE_CATEGORY_HELP'
+                ))?>
+            </div>
+        </td>
+    </tr>
+    <tr>
+        <td width="40%">
+            <?=htmlspecialcharsbx((string)Loc::getMessage(
+                'OTUS_AUTOSERVICE_OPTIONS_DEAL_CAR_FIELD'
+            ))?>
+        </td>
+        <td width="60%">
+            <input
+                type="text"
+                value="<?=htmlspecialcharsbx($dealCarFieldName)?>"
+                size="35"
+                readonly
+            >
+            <div class="adm-info-message-wrap">
+                <?=htmlspecialcharsbx((string)Loc::getMessage(
+                    'OTUS_AUTOSERVICE_OPTIONS_DEAL_CAR_FIELD_HELP'
+                ))?>
+            </div>
         </td>
     </tr>
     <?php $tabControl->Buttons(); ?>
