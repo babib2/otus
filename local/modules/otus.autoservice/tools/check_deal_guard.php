@@ -6,10 +6,12 @@
 
 declare(strict_types=1);
 
+use Bitrix\Crm\Category\DealCategory;
 use Bitrix\Main\EventManager;
 use Bitrix\Main\Loader;
 use Otus\Autoservice\EventHandler\DealValidationHandler;
 use Otus\Autoservice\Integration\Crm\DealCarFieldManager;
+use Otus\Autoservice\Integration\Crm\ServiceDealPipelineManager;
 use Otus\Autoservice\Service\ModuleConfiguration;
 
 if (PHP_SAPI !== 'cli') {
@@ -55,6 +57,22 @@ $fieldExists = $fieldManager->exists();
 /** @var int|null $categoryId Настроенное направление сервисных сделок. */
 $categoryId = ModuleConfiguration::getServiceDealCategoryId();
 
+/**
+ * @var bool $serviceCategoryExists
+ * Выбрано ли существующее направление; нулевой ID обозначает основную воронку Bitrix.
+ */
+$serviceCategoryExists = $categoryId !== null
+    && ($categoryId === 0 || DealCategory::exists($categoryId));
+
+/** @var ServiceDealPipelineManager $pipelineManager Диагностика воронки миграции. */
+$pipelineManager = new ServiceDealPipelineManager();
+
+/** @var int|null $managedCategoryId Направление, однозначно созданное миграцией. */
+$managedCategoryId = $pipelineManager->getManagedCategoryId();
+
+/** @var bool $pipelineReady Созданы ли направление и полный набор стадий. */
+$pipelineReady = $pipelineManager->isReady();
+
 /** @var EventManager $eventManager Реестр постоянных обработчиков Bitrix. */
 $eventManager = EventManager::getInstance();
 
@@ -93,7 +111,15 @@ printf(
 );
 printf(
     "Service deal category: %s%s",
-    $categoryId === null ? 'NOT CONFIGURED' : (string)$categoryId,
+    $categoryId === null
+        ? 'NOT CONFIGURED'
+        : (string)$categoryId . ($serviceCategoryExists ? '' : ' (NOT FOUND)'),
+    PHP_EOL
+);
+printf(
+    "Managed service pipeline category: %s; stages: %s%s",
+    $managedCategoryId === null ? 'NOT FOUND' : (string)$managedCategoryId,
+    $pipelineReady ? 'OK' : 'NOT READY',
     PHP_EOL
 );
 printf(
@@ -107,9 +133,14 @@ printf(
     PHP_EOL
 );
 
-if (!$fieldExists || !$addHandlerExists || !$updateHandlerExists) {
+if (
+    !$fieldExists
+    || !$serviceCategoryExists
+    || !$pipelineReady
+    || !$addHandlerExists
+    || !$updateHandlerExists
+) {
     exit(1);
 }
 
-// Не выбранная воронка выводится как явное предупреждение, но инфраструктура исправна.
 exit(0);

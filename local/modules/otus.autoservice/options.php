@@ -11,6 +11,7 @@ use Bitrix\Main\Config\Option;
 use Bitrix\Main\Context;
 use Bitrix\Main\Loader;
 use Bitrix\Main\Localization\Loc;
+use Otus\Autoservice\Integration\Crm\ServiceDealPipelineManager;
 use Otus\Autoservice\Service\ModuleConfiguration;
 
 Loc::loadMessages(__FILE__);
@@ -48,20 +49,43 @@ $dealCategories = Loader::includeModule('crm')
     ? DealCategory::getAll(true)
     : [];
 
+/** @var int[] $availableCategoryIds Белый список ID из штатного CRM API. */
+$availableCategoryIds = array_map(
+    static function (array $category): int {
+        return (int)$category['ID'];
+    },
+    $dealCategories
+);
+
 // Изменения принимаются только POST-запросом с действительным идентификатором сессии.
 if ($request->isPost() && check_bitrix_sessid()) {
     if ($request->getPost('RestoreDefaults') !== null) {
-        // Сброс формы не затрагивает версию схемы и признаки владения CRM-полем.
+        // Сброс возвращает воронку миграции и не затрагивает версию схемы или владение CRM-полем.
         foreach (
             [
                 ModuleConfiguration::OPTION_ENABLED,
                 ModuleConfiguration::OPTION_LOG_LEVEL,
-                ModuleConfiguration::OPTION_SERVICE_DEAL_CATEGORY_ID,
             ] as $optionName
         ) {
             /** @var string $optionName Очередная пользовательская настройка для сброса. */
             Option::delete($moduleId, ['name' => $optionName]);
         }
+
+        /** @var int|null $managedCategoryId Направление, найденное по метаданным миграции. */
+        $managedCategoryId = (new ServiceDealPipelineManager())->getManagedCategoryId();
+        if ($managedCategoryId !== null) {
+            Option::set(
+                $moduleId,
+                ModuleConfiguration::OPTION_SERVICE_DEAL_CATEGORY_ID,
+                (string)$managedCategoryId
+            );
+        } else {
+            Option::delete(
+                $moduleId,
+                ['name' => ModuleConfiguration::OPTION_SERVICE_DEAL_CATEGORY_ID]
+            );
+        }
+
         $saved = true;
     } elseif (
         $request->getPost('Update') !== null
@@ -82,14 +106,6 @@ if ($request->isPost() && check_bitrix_sessid()) {
         /** @var string $categoryIdValue ID выбранного направления либо пустая строка. */
         $categoryIdValue = trim(
             (string)$request->getPost(ModuleConfiguration::OPTION_SERVICE_DEAL_CATEGORY_ID)
-        );
-
-        /** @var int[] $availableCategoryIds Белый список ID из штатного CRM API. */
-        $availableCategoryIds = array_map(
-            static function (array $category): int {
-                return (int)$category['ID'];
-            },
-            $dealCategories
         );
 
         if (

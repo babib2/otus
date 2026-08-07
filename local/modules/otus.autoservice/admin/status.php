@@ -6,11 +6,13 @@
 
 declare(strict_types=1);
 
+use Bitrix\Crm\Category\DealCategory;
 use Bitrix\Main\Context;
 use Bitrix\Main\Loader;
 use Bitrix\Main\Localization\Loc;
 use Bitrix\Main\ModuleManager;
 use Otus\Autoservice\Integration\Crm\DealCarFieldManager;
+use Otus\Autoservice\Integration\Crm\ServiceDealPipelineManager;
 use Otus\Autoservice\Migration\MigrationManager;
 use Otus\Autoservice\Service\ModuleConfiguration;
 use Otus\Autoservice\Service\ModuleRequirements;
@@ -51,10 +53,16 @@ if (!$moduleLoaded) {
 /** @var \Bitrix\Main\HttpRequest $request Текущий запрос диагностической страницы. */
 $request = Context::getCurrent()->getRequest();
 
-/** @var array<string, string>|null $migrationMessage Сообщение о результате запуска миграций. */
+/** @var array<string, string>|null $migrationMessage Сообщение о результате миграции или восстановления. */
 $migrationMessage = null;
 
-if ($request->isPost() && $request->getPost('apply_migrations') === 'Y') {
+/** @var bool $applyMigrationsRequested Запрошено ли применение новых версий схемы. */
+$applyMigrationsRequested = $request->getPost('apply_migrations') === 'Y';
+
+/** @var bool $repairPipelineRequested Запрошено ли восстановление конфигурации сервисной воронки. */
+$repairPipelineRequested = $request->getPost('repair_pipeline') === 'Y';
+
+if ($request->isPost() && ($applyMigrationsRequested || $repairPipelineRequested)) {
     if ($moduleRight < 'W') {
         $migrationMessage = [
             'MESSAGE' => (string)Loc::getMessage('OTUS_AUTOSERVICE_STATUS_MIGRATION_ACCESS_DENIED'),
@@ -67,14 +75,29 @@ if ($request->isPost() && $request->getPost('apply_migrations') === 'Y') {
         ];
     } else {
         try {
-            MigrationManager::migrate();
+            if ($repairPipelineRequested) {
+                // Сначала применяются возможные миграции, затем повторно сверяется CRM-конфигурация.
+                MigrationManager::migrate();
+                (new ServiceDealPipelineManager())->repair();
+            } else {
+                MigrationManager::migrate();
+            }
+
             $migrationMessage = [
-                'MESSAGE' => (string)Loc::getMessage('OTUS_AUTOSERVICE_STATUS_MIGRATION_SUCCESS'),
+                'MESSAGE' => (string)Loc::getMessage(
+                    $repairPipelineRequested
+                        ? 'OTUS_AUTOSERVICE_STATUS_PIPELINE_REPAIR_SUCCESS'
+                        : 'OTUS_AUTOSERVICE_STATUS_MIGRATION_SUCCESS'
+                ),
                 'TYPE' => 'OK',
             ];
         } catch (Throwable $exception) {
             $migrationMessage = [
-                'MESSAGE' => (string)Loc::getMessage('OTUS_AUTOSERVICE_STATUS_MIGRATION_ERROR'),
+                'MESSAGE' => (string)Loc::getMessage(
+                    $repairPipelineRequested
+                        ? 'OTUS_AUTOSERVICE_STATUS_PIPELINE_REPAIR_ERROR'
+                        : 'OTUS_AUTOSERVICE_STATUS_MIGRATION_ERROR'
+                ),
                 'DETAILS' => htmlspecialcharsbx($exception->getMessage()),
                 'TYPE' => 'ERROR',
             ];
@@ -97,11 +120,25 @@ $hasPendingMigrations = MigrationManager::hasPendingMigrations();
 /** @var int|null $serviceCategoryId Выбранное направление сервисного обслуживания. */
 $serviceCategoryId = ModuleConfiguration::getServiceDealCategoryId();
 
+/** @var bool $serviceCategoryExists Существует ли выбранное рабочее направление CRM. */
+$serviceCategoryExists = $serviceCategoryId !== null
+    && Loader::includeModule('crm')
+    && ($serviceCategoryId === 0 || DealCategory::exists($serviceCategoryId));
+
 /** @var string $dealCarFieldName Код связи CRM-сделки с автомобилем. */
 $dealCarFieldName = ModuleConfiguration::getDealCarFieldName();
 
 /** @var bool $dealCarFieldExists Создано ли совместимое поле автомобиля в CRM. */
 $dealCarFieldExists = (new DealCarFieldManager())->exists();
+
+/** @var ServiceDealPipelineManager $servicePipelineManager Диагностика воронки миграции. */
+$servicePipelineManager = new ServiceDealPipelineManager();
+
+/** @var int|null $managedServiceCategoryId Направление, однозначно созданное миграцией. */
+$managedServiceCategoryId = $servicePipelineManager->getManagedCategoryId();
+
+/** @var bool $servicePipelineReady Созданы ли направление и все стадии сервиса. */
+$servicePipelineReady = $servicePipelineManager->isReady();
 ?>
 <div class="adm-detail-content-wrap">
     <?php if ($migrationMessage !== null): ?>
@@ -168,11 +205,44 @@ $dealCarFieldExists = (new DealCarFieldManager())->exists();
                         ))?>
                     </td>
                     <td class="adm-detail-content-cell-r">
-                        <?=$serviceCategoryId === null
-                            ? htmlspecialcharsbx((string)Loc::getMessage(
+                        <?php if ($serviceCategoryId === null): ?>
+                            <?=htmlspecialcharsbx((string)Loc::getMessage(
                                 'OTUS_AUTOSERVICE_STATUS_NOT_CONFIGURED'
-                            ))
-                            : 'ID: ' . $serviceCategoryId?>
+                            ))?>
+                        <?php elseif (!$serviceCategoryExists): ?>
+                            ID: <?=$serviceCategoryId?>
+                            — <?=htmlspecialcharsbx((string)Loc::getMessage(
+                                'OTUS_AUTOSERVICE_STATUS_SERVICE_CATEGORY_NOT_FOUND'
+                            ))?>
+                        <?php else: ?>
+                            ID: <?=$serviceCategoryId?>
+                            — <?=htmlspecialcharsbx((string)Loc::getMessage(
+                                'OTUS_AUTOSERVICE_STATUS_SERVICE_CATEGORY_EXISTS'
+                            ))?>
+                        <?php endif; ?>
+                    </td>
+                </tr>
+                <tr>
+                    <td class="adm-detail-content-cell-l">
+                        <?=htmlspecialcharsbx((string)Loc::getMessage(
+                            'OTUS_AUTOSERVICE_STATUS_MANAGED_SERVICE_CATEGORY'
+                        ))?>
+                    </td>
+                    <td class="adm-detail-content-cell-r">
+                        <?php if ($managedServiceCategoryId === null): ?>
+                            <?=htmlspecialcharsbx((string)Loc::getMessage(
+                                'OTUS_AUTOSERVICE_STATUS_PIPELINE_NOT_FOUND'
+                            ))?>
+                        <?php else: ?>
+                            ID: <?=$managedServiceCategoryId?>
+                            — <?=$servicePipelineReady
+                                ? htmlspecialcharsbx((string)Loc::getMessage(
+                                    'OTUS_AUTOSERVICE_STATUS_PIPELINE_READY'
+                                ))
+                                : htmlspecialcharsbx((string)Loc::getMessage(
+                                    'OTUS_AUTOSERVICE_STATUS_PIPELINE_NOT_READY'
+                                ))?>
+                        <?php endif; ?>
                     </td>
                 </tr>
                 <tr>
@@ -195,14 +265,25 @@ $dealCarFieldExists = (new DealCarFieldManager())->exists();
                 </tbody>
             </table>
 
-            <?php if ($hasPendingMigrations && $moduleRight >= 'W'): ?>
+            <?php if (
+                ($hasPendingMigrations || !$servicePipelineReady || !$serviceCategoryExists)
+                && $moduleRight >= 'W'
+            ): ?>
                 <form method="post" action="<?=htmlspecialcharsbx($APPLICATION->GetCurPageParam('', []))?>">
                     <?=bitrix_sessid_post()?>
-                    <input type="hidden" name="apply_migrations" value="Y">
+                    <?php if ($hasPendingMigrations): ?>
+                        <input type="hidden" name="apply_migrations" value="Y">
+                    <?php else: ?>
+                        <input type="hidden" name="repair_pipeline" value="Y">
+                    <?php endif; ?>
                     <input
                         type="submit"
                         class="adm-btn-save"
-                        value="<?=htmlspecialcharsbx((string)Loc::getMessage('OTUS_AUTOSERVICE_STATUS_APPLY_MIGRATIONS'))?>"
+                        value="<?=htmlspecialcharsbx((string)Loc::getMessage(
+                            $hasPendingMigrations
+                                ? 'OTUS_AUTOSERVICE_STATUS_APPLY_MIGRATIONS'
+                                : 'OTUS_AUTOSERVICE_STATUS_REPAIR_PIPELINE'
+                        ))?>"
                     >
                 </form>
             <?php endif; ?>

@@ -31,6 +31,7 @@ final class MigrationManager
     private const MIGRATION_CLASSES = [
         Version202608050001CreateCarTable::class,
         Version202608050002CreateDealCarField::class,
+        Version202608050003CreateServiceDealPipeline::class,
     ];
 
     /**

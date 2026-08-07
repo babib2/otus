@@ -38,6 +38,33 @@ final class ModuleConfiguration
      */
     public const OPTION_SERVICE_DEAL_CATEGORY_ID = 'service_deal_category_id';
 
+    /** ID направления, фактически созданного миграцией, независимо от выбора администратора. */
+    public const OPTION_SERVICE_DEAL_CATEGORY_CREATED_ID = 'service_deal_category_created_id';
+
+    /** Код настройки стадии «Приёмка». */
+    public const OPTION_SERVICE_STAGE_RECEPTION = 'service_stage_reception';
+
+    /** Код настройки стадии «Диагностика». */
+    public const OPTION_SERVICE_STAGE_DIAGNOSTICS = 'service_stage_diagnostics';
+
+    /** Код настройки стадии «Ожидание запчастей». */
+    public const OPTION_SERVICE_STAGE_WAITING_PARTS = 'service_stage_waiting_parts';
+
+    /** Код настройки стадии «Ремонт». */
+    public const OPTION_SERVICE_STAGE_REPAIR = 'service_stage_repair';
+
+    /** Код настройки стадии «Проверка». */
+    public const OPTION_SERVICE_STAGE_QUALITY_CHECK = 'service_stage_quality_check';
+
+    /** Код настройки успешной стадии «Завершено». */
+    public const OPTION_SERVICE_STAGE_COMPLETED = 'service_stage_completed';
+
+    /** Код настройки финальной стадии «Закрыто без ремонта». */
+    public const OPTION_SERVICE_STAGE_FAILED = 'service_stage_failed';
+
+    /** Код настройки финальной стадии «Отменено клиентом». */
+    public const OPTION_SERVICE_STAGE_CANCELLED = 'service_stage_cancelled';
+
     /**
      * Имя технической настройки с кодом поля автомобиля в CRM-сделке.
      */

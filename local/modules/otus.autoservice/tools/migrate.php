@@ -9,6 +9,7 @@ declare(strict_types=1);
 use Bitrix\Main\Application;
 use Bitrix\Main\Loader;
 use Otus\Autoservice\Integration\Crm\DealCarFieldManager;
+use Otus\Autoservice\Integration\Crm\ServiceDealPipelineManager;
 use Otus\Autoservice\Migration\MigrationManager;
 use Otus\Autoservice\Model\CarTable;
 
@@ -79,15 +80,19 @@ try {
     /** @var bool $dealCarFieldExists Создано ли совместимое поле автомобиля в CRM. */
     $dealCarFieldExists = (new DealCarFieldManager())->exists();
 
+    /** @var bool $servicePipelineReady Созданы ли сервисная воронка и её стадии. */
+    $servicePipelineReady = (new ServiceDealPipelineManager())->isReady();
+
     printf(
-        "Schema after: %s; car table: %s; deal car field: %s%s",
+        "Schema after: %s; car table: %s; deal car field: %s; service pipeline: %s%s",
         MigrationManager::getCurrentVersion(),
         $tableExists ? 'OK' : 'NOT FOUND',
         $dealCarFieldExists ? 'OK' : 'NOT FOUND',
+        $servicePipelineReady ? 'OK' : 'NOT READY',
         PHP_EOL
     );
 
-    exit($tableExists && $dealCarFieldExists ? 0 : 1);
+    exit($tableExists && $dealCarFieldExists && $servicePipelineReady ? 0 : 1);
 } catch (Throwable $exception) {
     fwrite(STDERR, 'Migration failed: ' . $exception->getMessage() . PHP_EOL);
     exit(1);
