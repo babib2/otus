@@ -180,4 +180,58 @@ final class CarRepository
 
         return $cars;
     }
+
+    /**
+     * Возвращает страницу автомобилей контакта для стандартного CRM-GRID.
+     *
+     * @param array<string, mixed>  $filter Подготовленный сервисом безопасный ORM-фильтр.
+     * @param array<string, string> $order  Сортировка только по разрешённым колонкам.
+     * @param int                   $limit  Максимальное количество строк страницы.
+     * @param int                   $offset Смещение первой строки страницы.
+     *
+     * @return array<int, array<string, mixed>> Страница автомобилей без дополнительных запросов в цикле.
+     */
+    public function findPage(array $filter, array $order, int $limit, int $offset): array
+    {
+        /** @var array<int, array<string, mixed>> $cars Накопленная страница результата GRID. */
+        $cars = [];
+
+        /** @var \Bitrix\Main\ORM\Query\Result $queryResult Одна ORM-выборка текущей страницы. */
+        $queryResult = CarTable::getList(
+            [
+                'select' => [
+                    'ID',
+                    'CONTACT_ID',
+                    'MAKE',
+                    'MODEL',
+                    'LICENSE_PLATE',
+                    'YEAR',
+                    'COLOR',
+                    'MILEAGE',
+                    'ACTIVE',
+                ],
+                'filter' => $filter,
+                'order' => $order,
+                'limit' => max(1, $limit),
+                'offset' => max(0, $offset),
+            ]
+        );
+
+        while ($car = $queryResult->fetch()) {
+            /** @var array<string, mixed> $car Очередной автомобиль текущей страницы. */
+            $cars[] = $car;
+        }
+
+        return $cars;
+    }
+
+    /**
+     * Подсчитывает автомобили, соответствующие фильтру GRID.
+     *
+     * @param array<string, mixed> $filter Подготовленный сервисом безопасный ORM-фильтр.
+     */
+    public function countByFilter(array $filter): int
+    {
+        return CarTable::getCount($filter);
+    }
 }

@@ -12,6 +12,7 @@ use Bitrix\Main\Localization\Loc;
 use Bitrix\Main\ModuleManager;
 use Otus\Autoservice\EventHandler\EventRegistry;
 use Otus\Autoservice\Integration\Crm\DealCarSelectorAssetManager;
+use Otus\Autoservice\Integration\Crm\GarageComponentManager;
 use Otus\Autoservice\Migration\MigrationManager;
 use Otus\Autoservice\Service\ModuleRequirements;
 
@@ -21,6 +22,7 @@ Loc::loadMessages(__FILE__);
 require_once dirname(__DIR__) . '/include.php';
 require_once dirname(__DIR__) . '/lib/EventHandler/EventRegistry.php';
 require_once dirname(__DIR__) . '/lib/Integration/Crm/DealCarSelectorAssetManager.php';
+require_once dirname(__DIR__) . '/lib/Integration/Crm/GarageComponentManager.php';
 require_once dirname(__DIR__) . '/lib/Migration/MigrationInterface.php';
 require_once dirname(__DIR__) . '/lib/Migration/MigrationManager.php';
 require_once dirname(__DIR__) . '/lib/Service/ModuleRequirements.php';
@@ -189,11 +191,11 @@ class otus_autoservice extends CModule
     }
 
     /**
-     * Копирует административные точки входа и публичные ресурсы селектора автомобиля.
+     * Копирует административные точки входа, ресурсы селектора и компонент гаража.
      *
      * Исходники остаются в local/modules. В /bitrix/admin помещаются короткие
-     * прокси-файлы для административного роутинга, а JavaScript и CSS публикуются
-     * в /local/js, откуда их может безопасно загрузить браузер.
+     * прокси-файлы для административного роутинга, JavaScript и CSS селектора —
+     * в /local/js, а компонент с защищённым endpoint вкладки — в /local/components.
      *
      * @return bool Результат штатной операции CopyDirFiles().
      */
@@ -210,7 +212,10 @@ class otus_autoservice extends CModule
         /** @var bool $selectorAssetsInstalled Успешность публикации JavaScript и CSS селектора. */
         $selectorAssetsInstalled = DealCarSelectorAssetManager::install();
 
-        return $adminFilesInstalled && $selectorAssetsInstalled;
+        /** @var bool $garageComponentInstalled Успешность публикации компонента вкладки контакта. */
+        $garageComponentInstalled = GarageComponentManager::install();
+
+        return $adminFilesInstalled && $selectorAssetsInstalled && $garageComponentInstalled;
     }
 
     /**
@@ -228,6 +233,7 @@ class otus_autoservice extends CModule
             Application::getDocumentRoot() . '/bitrix/admin'
         );
         DealCarSelectorAssetManager::uninstall();
+        GarageComponentManager::uninstall();
 
         return true;
     }

@@ -95,7 +95,126 @@ final class DealOpenOrderService
         /** @var array<string, mixed> $candidateFields Полное состояние после предполагаемого обновления. */
         $candidateFields = array_merge($currentFields, $changedFields);
 
+        if (!$this->shouldValidateUpdate($changedFields, $currentFields, $candidateFields)) {
+            return new Result();
+        }
+
         return $this->validate($candidateFields, $currentFields, max(0, $userId));
+    }
+
+    /**
+     * Проверяет наличие незакрытого сервисного заказа по автомобилю перед его архивированием.
+     *
+     * Метод не возвращает реквизиты найденной сделки, чтобы вызывающий код не мог
+     * раскрыть данные заказа пользователю без отдельной проверки CRM-прав.
+     *
+     * @param int $carId Идентификатор архивируемого автомобиля.
+     */
+    public function hasOpenOrderForCar(int $carId): bool
+    {
+        if ($carId <= 0) {
+            return false;
+        }
+
+        /** @var int|null $serviceCategoryId Настроенное направление сервисного обслуживания. */
+        $serviceCategoryId = ModuleConfiguration::getServiceDealCategoryId();
+        if ($serviceCategoryId === null) {
+            return false;
+        }
+
+        if (!Loader::includeModule('crm')) {
+            throw new RuntimeException(
+                (string)Loc::getMessage('OTUS_AUTOSERVICE_DEAL_ERROR_CRM_REQUIRED')
+            );
+        }
+
+        return $this->findOpenDeal(
+            $serviceCategoryId,
+            ModuleConfiguration::getDealCarFieldName(),
+            $carId,
+            0
+        ) !== null;
+    }
+
+    /**
+     * Определяет, затрагивает ли обновление поля, способные изменить блокировку автомобиля.
+     *
+     * Обычное изменение открытой сделки повторно не проверяет активность уже
+     * привязанного автомобиля. Это позволяет завершить ранее начатый ремонт и
+     * одновременно сохраняет обязательную проверку при смене автомобиля, контакта,
+     * направления или возврате сделки из финальной стадии.
+     *
+     * @param array<string, mixed> $changedFields   Поля из события обновления CRM.
+     * @param array<string, mixed> $currentFields   Состояние сделки до обновления.
+     * @param array<string, mixed> $candidateFields Состояние сделки после обновления.
+     */
+    private function shouldValidateUpdate(
+        array $changedFields,
+        array $currentFields,
+        array $candidateFields
+    ): bool {
+        /** @var int|null $serviceCategoryId Настроенное сервисное направление. */
+        $serviceCategoryId = ModuleConfiguration::getServiceDealCategoryId();
+        if ($serviceCategoryId === null) {
+            return false;
+        }
+
+        /** @var int $currentCategoryId Направление сделки до обновления. */
+        $currentCategoryId = (int)($currentFields['CATEGORY_ID'] ?? 0);
+
+        /** @var int $candidateCategoryId Направление сделки после обновления. */
+        $candidateCategoryId = (int)($candidateFields['CATEGORY_ID'] ?? 0);
+
+        if (
+            $currentCategoryId !== $serviceCategoryId
+            && $candidateCategoryId !== $serviceCategoryId
+        ) {
+            return false;
+        }
+
+        if ($currentCategoryId !== $candidateCategoryId) {
+            return true;
+        }
+
+        /** @var string $carFieldName Код пользовательского поля автомобиля. */
+        $carFieldName = ModuleConfiguration::getDealCarFieldName();
+        if (
+            array_key_exists($carFieldName, $changedFields)
+            && (int)($currentFields[$carFieldName] ?? 0) !== (int)($candidateFields[$carFieldName] ?? 0)
+        ) {
+            return true;
+        }
+
+        if (
+            array_key_exists('CONTACT_ID', $changedFields)
+            && (int)($currentFields['CONTACT_ID'] ?? 0) !== (int)($candidateFields['CONTACT_ID'] ?? 0)
+        ) {
+            return true;
+        }
+
+        if (!array_key_exists('STAGE_ID', $changedFields)) {
+            return false;
+        }
+
+        /** @var string $currentStageId Стадия сделки до обновления. */
+        $currentStageId = (string)($currentFields['STAGE_ID'] ?? '');
+
+        /** @var string $candidateStageId Стадия сделки после обновления. */
+        $candidateStageId = (string)($candidateFields['STAGE_ID'] ?? '');
+
+        /** @var string $currentSemantic Семантика стадии до обновления. */
+        $currentSemantic = (string)($currentFields['STAGE_SEMANTIC_ID'] ?? '');
+        if ($currentSemantic === '' && $currentStageId !== '') {
+            $currentSemantic = (string)\CCrmDeal::GetSemanticID($currentStageId, $currentCategoryId);
+        }
+
+        /** @var string $candidateSemantic Семантика стадии после обновления. */
+        $candidateSemantic = $candidateStageId === ''
+            ? ''
+            : (string)\CCrmDeal::GetSemanticID($candidateStageId, $candidateCategoryId);
+
+        return $currentSemantic !== PhaseSemantics::PROCESS
+            && $candidateSemantic === PhaseSemantics::PROCESS;
     }
 
     /**

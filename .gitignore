@@ -386,3 +386,4 @@ PROJECT_PLAN.md
 
 # Published copies of module frontend assets (sources live in local/modules)
 /local/js/otus.autoservice/
+/local/components/otus/autoservice.garage/

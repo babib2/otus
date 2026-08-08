@@ -10,6 +10,15 @@
 declare(strict_types=1);
 
 return [
+    'controllers' => [
+        'value' => [
+            'defaultNamespace' => '\\Otus\\Autoservice\\Controller',
+            'namespaces' => [
+                '\\Otus\\Autoservice\\Controller' => 'api',
+            ],
+        ],
+        'readonly' => true,
+    ],
     'ui.entity-selector' => [
         'value' => [
             'entities' => [

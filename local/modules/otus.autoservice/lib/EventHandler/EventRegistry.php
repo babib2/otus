@@ -16,6 +16,19 @@ use Bitrix\Main\EventManager;
 final class EventRegistry
 {
     /**
+     * Описание обработчика вкладки «Гараж» в карточке CRM-контакта.
+     *
+     * @var array{from_module: string, event: string, class: class-string, method: string, sort: int}
+     */
+    private const CONTACT_GARAGE_TAB_EVENT = [
+        'from_module' => 'crm',
+        'event' => 'onEntityDetailsTabsInitialized',
+        'class' => ContactGarageTabHandler::class,
+        'method' => 'onTabsInitialized',
+        'sort' => 100,
+    ];
+
+    /**
      * Описание обработчика, подключающего селектор автомобиля в карточке сделки.
      * Константа вынесена отдельно, чтобы интерфейсная миграция могла регистрировать
      * и откатывать только свой обработчик, не затрагивая серверную валидацию.
@@ -60,6 +73,7 @@ final class EventRegistry
             'sort' => 50,
         ],
         self::DEAL_CAR_SELECTOR_ASSET_EVENT,
+        self::CONTACT_GARAGE_TAB_EVENT,
     ];
 
     /**
@@ -99,6 +113,22 @@ final class EventRegistry
     public static function uninstallDealCarSelectorAssets(): void
     {
         self::unregisterEvents([self::DEAL_CAR_SELECTOR_ASSET_EVENT]);
+    }
+
+    /**
+     * Регистрирует только вкладку «Гараж» при обновлении уже установленного модуля.
+     */
+    public static function installContactGarageTab(): void
+    {
+        self::registerEvents([self::CONTACT_GARAGE_TAB_EVENT]);
+    }
+
+    /**
+     * Удаляет только обработчик вкладки «Гараж» при откате её миграции.
+     */
+    public static function uninstallContactGarageTab(): void
+    {
+        self::unregisterEvents([self::CONTACT_GARAGE_TAB_EVENT]);
     }
 
     /**

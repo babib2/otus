@@ -1,0 +1,53 @@
+/*
+ * Оформляет панель, форму и адаптивное размещение элементов вкладки «Гараж».
+ */
+
+.otus-autoservice-garage {
+    box-sizing: border-box;
+    padding: 16px;
+}
+
+.otus-autoservice-garage__toolbar {
+    align-items: center;
+    display: flex;
+    gap: 12px;
+    justify-content: space-between;
+    margin-bottom: 12px;
+}
+
+.otus-autoservice-garage__filter {
+    flex: 1 1 auto;
+    min-width: 260px;
+}
+
+.otus-autoservice-garage-form {
+    box-sizing: border-box;
+    display: grid;
+    gap: 14px;
+    grid-template-columns: repeat(2, minmax(220px, 1fr));
+    padding: 20px;
+    width: 620px;
+}
+
+.otus-autoservice-garage-form__field {
+    min-width: 0;
+}
+
+.otus-autoservice-garage-form__label {
+    color: #525c69;
+    display: block;
+    font-size: 13px;
+    margin-bottom: 6px;
+}
+
+@media (max-width: 760px) {
+    .otus-autoservice-garage__toolbar {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .otus-autoservice-garage-form {
+        grid-template-columns: 1fr;
+        width: min(92vw, 620px);
+    }
+}

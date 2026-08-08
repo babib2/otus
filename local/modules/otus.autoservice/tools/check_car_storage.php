@@ -91,19 +91,37 @@ try {
         throw new RuntimeException('Invalid year or mileage was accepted.');
     }
 
+    /** @var \Bitrix\Main\ORM\Data\AddResult $invalidTypeResult Проверка сложного значения строкового поля. */
+    $invalidTypeResult = $service->create(
+        [
+            'CONTACT_ID' => 1,
+            'MAKE' => ['OTUS'],
+            'MODEL' => 'Invalid Type Test',
+            'LICENSE_PLATE' => 'OTUS-INVALID-TYPE',
+            'MILEAGE' => 0,
+        ],
+        0
+    );
+
+    if ($invalidTypeResult->isSuccess()) {
+        CarTable::delete((int)$invalidTypeResult->getId());
+        throw new RuntimeException('Array value of a string field was accepted.');
+    }
+
     /** @var string $sourcePlate Номер с разделителем и нижним регистром для проверки нормализации. */
     $sourcePlate = 'otus-' . strtolower(substr(hash('sha256', uniqid('', true)), 0, 8));
 
     /** @var \Bitrix\Main\ORM\Data\AddResult $addResult Результат создания тестового автомобиля. */
-    $addResult = $service->create(
+    $addResult = $service->createForContact(
+        1,
         [
-            'CONTACT_ID' => 1,
             'MAKE' => 'OTUS',
             'MODEL' => 'Integration Test',
             'LICENSE_PLATE' => $sourcePlate,
             'YEAR' => (int)date('Y'),
             'COLOR' => 'Test',
             'MILEAGE' => 1,
+            'ACTIVE' => 'N',
         ],
         0
     );
@@ -122,6 +140,10 @@ try {
 
     if ($createdCar['LICENSE_PLATE'] !== $service->normalizeLicensePlate($sourcePlate)) {
         throw new RuntimeException('License plate was not normalized.');
+    }
+
+    if ((string)$createdCar['ACTIVE'] !== 'Y') {
+        throw new RuntimeException('Garage create action accepted an archived state.');
     }
 
     /** @var \Bitrix\Main\ORM\Data\UpdateResult $updateResult Результат обновления пробега. */
