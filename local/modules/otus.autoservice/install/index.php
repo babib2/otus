@@ -11,6 +11,7 @@ use Bitrix\Main\Config\Option;
 use Bitrix\Main\Localization\Loc;
 use Bitrix\Main\ModuleManager;
 use Otus\Autoservice\EventHandler\EventRegistry;
+use Otus\Autoservice\Integration\Crm\DealCarSelectorAssetManager;
 use Otus\Autoservice\Migration\MigrationManager;
 use Otus\Autoservice\Service\ModuleRequirements;
 
@@ -19,6 +20,7 @@ Loc::loadMessages(__FILE__);
 // Регистрирует классы миграций и ORM до первого InstallDB() нового модуля.
 require_once dirname(__DIR__) . '/include.php';
 require_once dirname(__DIR__) . '/lib/EventHandler/EventRegistry.php';
+require_once dirname(__DIR__) . '/lib/Integration/Crm/DealCarSelectorAssetManager.php';
 require_once dirname(__DIR__) . '/lib/Migration/MigrationInterface.php';
 require_once dirname(__DIR__) . '/lib/Migration/MigrationManager.php';
 require_once dirname(__DIR__) . '/lib/Service/ModuleRequirements.php';
@@ -187,28 +189,35 @@ class otus_autoservice extends CModule
     }
 
     /**
-     * Копирует административные точки входа модуля.
+     * Копирует административные точки входа и публичные ресурсы селектора автомобиля.
      *
-     * Исходники остаются в local/modules, а в /bitrix/admin помещаются только
-     * короткие прокси-файлы, необходимые стандартному административному роутингу.
+     * Исходники остаются в local/modules. В /bitrix/admin помещаются короткие
+     * прокси-файлы для административного роутинга, а JavaScript и CSS публикуются
+     * в /local/js, откуда их может безопасно загрузить браузер.
      *
      * @return bool Результат штатной операции CopyDirFiles().
      */
     public function InstallFiles()
     {
-        return CopyDirFiles(
+        /** @var bool $adminFilesInstalled Успешность копирования административных прокси-файлов. */
+        $adminFilesInstalled = CopyDirFiles(
             __DIR__ . '/admin',
             Application::getDocumentRoot() . '/bitrix/admin',
             true,
             true
         );
+
+        /** @var bool $selectorAssetsInstalled Успешность публикации JavaScript и CSS селектора. */
+        $selectorAssetsInstalled = DealCarSelectorAssetManager::install();
+
+        return $adminFilesInstalled && $selectorAssetsInstalled;
     }
 
     /**
-     * Удаляет только файлы, скопированные установщиком.
+     * Удаляет только административные прокси и ресурсы, скопированные установщиком.
      *
      * DeleteDirFiles() сопоставляет исходный и целевой каталоги, поэтому соседние
-     * административные файлы других модулей не затрагиваются.
+     * административные и клиентские файлы других модулей не затрагиваются.
      *
      * @return bool Всегда true после завершения штатной операции удаления.
      */
@@ -218,6 +227,7 @@ class otus_autoservice extends CModule
             __DIR__ . '/admin',
             Application::getDocumentRoot() . '/bitrix/admin'
         );
+        DealCarSelectorAssetManager::uninstall();
 
         return true;
     }

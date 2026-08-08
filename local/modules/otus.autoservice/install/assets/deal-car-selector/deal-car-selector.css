@@ -1,0 +1,82 @@
+/**
+ * Оформляет интерфейс выбора автомобиля поверх штатного числового CRM-поля.
+ */
+
+.otus-autoservice-car-selector-native-input {
+    display: none !important;
+}
+
+.otus-autoservice-car-selector-host {
+    box-sizing: border-box;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    min-height: 39px;
+    padding: 5px 8px;
+    width: 100%;
+}
+
+.otus-autoservice-car-selector-value {
+    align-items: center;
+    color: #535c69;
+    display: flex;
+    flex: 1 1 220px;
+    min-height: 27px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.otus-autoservice-car-selector-actions {
+    align-items: center;
+    display: flex;
+    flex: 0 0 auto;
+    gap: 8px;
+}
+
+.otus-autoservice-car-selector-button {
+    background: transparent;
+    border: 0;
+    color: #2066b0;
+    cursor: pointer;
+    font: inherit;
+    padding: 3px 0;
+}
+
+.otus-autoservice-car-selector-button:hover,
+.otus-autoservice-car-selector-button:focus {
+    color: #0b66c3;
+    text-decoration: underline;
+}
+
+.otus-autoservice-car-selector-button:disabled {
+    color: #a8adb4;
+    cursor: default;
+    text-decoration: none;
+}
+
+.otus-autoservice-car-selector-clear {
+    color: #a33a3a;
+}
+
+.otus-autoservice-car-selector-warning {
+    color: #a36b00;
+    flex: 1 0 100%;
+    font-size: 12px;
+    line-height: 16px;
+}
+
+/* Название автомобиля, подставляемое вместо числового ID в режиме просмотра сделки. */
+.otus-autoservice-car-view-title {
+    color: inherit;
+    font-size: inherit;
+    line-height: inherit;
+}
+
+/* Дополнительные характеристики сохранённого автомобиля в режиме просмотра сделки. */
+.otus-autoservice-car-view-subtitle {
+    color: #828b95;
+    font-size: 12px;
+    line-height: 16px;
+    margin-top: 2px;
+}

@@ -32,6 +32,7 @@ final class MigrationManager
         Version202608050001CreateCarTable::class,
         Version202608050002CreateDealCarField::class,
         Version202608050003CreateServiceDealPipeline::class,
+        Version202608070004InstallDealCarSelector::class,
     ];
 
     /**

@@ -80,6 +80,56 @@ final class CarRepository
     }
 
     /**
+     * Возвращает запрошенные автомобили одного контакта независимо от их активности.
+     *
+     * Метод предназначен для безопасного восстановления исторических ссылок из сделок:
+     * ограничение по контакту не позволяет получить автомобиль другого клиента, а
+     * отсутствие фильтра `ACTIVE` сохраняет отображение закрытых заказов после архивации машины.
+     *
+     * @param int[] $ids       Положительные идентификаторы автомобилей.
+     * @param int   $contactId Идентификатор владельца-контакта CRM.
+     *
+     * @return array<int, array<string, mixed>> Найденные записи по убыванию ID.
+     */
+    public function findByIdsForContact(array $ids, int $contactId): array
+    {
+        /** @var int[] $normalizedIds Уникальные положительные ID для безопасного ORM-фильтра. */
+        $normalizedIds = [];
+        foreach ($ids as $id) {
+            /** @var int $normalizedId Очередной приведённый к целому идентификатор. */
+            $normalizedId = (int)$id;
+            if ($normalizedId > 0) {
+                $normalizedIds[$normalizedId] = $normalizedId;
+            }
+        }
+
+        if ($normalizedIds === [] || $contactId <= 0) {
+            return [];
+        }
+
+        /** @var array<int, array<string, mixed>> $cars Найденные автомобили заданного контакта. */
+        $cars = [];
+
+        /** @var \Bitrix\Main\ORM\Query\Result $queryResult Результат одной пакетной ORM-выборки. */
+        $queryResult = CarTable::getList(
+            [
+                'filter' => [
+                    '@ID' => array_values($normalizedIds),
+                    '=CONTACT_ID' => $contactId,
+                ],
+                'order' => ['ID' => 'DESC'],
+            ]
+        );
+
+        while ($car = $queryResult->fetch()) {
+            /** @var array<string, mixed> $car Очередная разрешённая запись автомобиля. */
+            $cars[] = $car;
+        }
+
+        return $cars;
+    }
+
+    /**
      * Возвращает первый автомобиль с указанным нормализованным госномером.
      *
      * @param string $licensePlate Номер без пробелов и дефисов в верхнем регистре.

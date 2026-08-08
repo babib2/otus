@@ -16,6 +16,21 @@ use Bitrix\Main\EventManager;
 final class EventRegistry
 {
     /**
+     * Описание обработчика, подключающего селектор автомобиля в карточке сделки.
+     * Константа вынесена отдельно, чтобы интерфейсная миграция могла регистрировать
+     * и откатывать только свой обработчик, не затрагивая серверную валидацию.
+     *
+     * @var array{from_module: string, event: string, class: class-string, method: string, sort: int}
+     */
+    private const DEAL_CAR_SELECTOR_ASSET_EVENT = [
+        'from_module' => 'main',
+        'event' => 'OnProlog',
+        'class' => DealCarSelectorAssetHandler::class,
+        'method' => 'onProlog',
+        'sort' => 100,
+    ];
+
+    /**
      * Новые обработчики добавляются сюда после реализации бизнес-сценариев.
      * Каждый элемент должен содержать идентификатор исходного модуля `from_module`,
      * имя события `event`, полное имя класса `class`, метод `method` и необязательный
@@ -44,6 +59,7 @@ final class EventRegistry
             'method' => 'onBeforeUpdate',
             'sort' => 50,
         ],
+        self::DEAL_CAR_SELECTOR_ASSET_EVENT,
     ];
 
     /**
@@ -55,11 +71,54 @@ final class EventRegistry
      */
     public static function install(): void
     {
+        self::registerEvents(self::EVENTS);
+    }
+
+    /**
+     * Удаляет все обработчики модуля из Bitrix.
+     *
+     * Использует тот же реестр, что и установка, поэтому сигнатуры регистрации
+     * и удаления всегда остаются синхронизированными.
+     */
+    public static function uninstall(): void
+    {
+        self::unregisterEvents(self::EVENTS);
+    }
+
+    /**
+     * Регистрирует только обработчик интерфейса автомобиля для обновления установленного модуля.
+     */
+    public static function installDealCarSelectorAssets(): void
+    {
+        self::registerEvents([self::DEAL_CAR_SELECTOR_ASSET_EVENT]);
+    }
+
+    /**
+     * Удаляет только обработчик интерфейса автомобиля при откате его миграции.
+     */
+    public static function uninstallDealCarSelectorAssets(): void
+    {
+        self::unregisterEvents([self::DEAL_CAR_SELECTOR_ASSET_EVENT]);
+    }
+
+    /**
+     * Регистрирует переданный набор совместимых обработчиков Bitrix.
+     *
+     * @param array<int, array{
+     *     from_module: string,
+     *     event: string,
+     *     class: class-string,
+     *     method: string,
+     *     sort?: int
+     * }> $events Точный набор добавляемых обработчиков.
+     */
+    private static function registerEvents(array $events): void
+    {
         /** @var EventManager $eventManager Менеджер регистрации событий ядра D7. */
         $eventManager = EventManager::getInstance();
 
-        /** @var array<string, mixed> $event Описание одного обработчика из реестра. */
-        foreach (self::EVENTS as $event) {
+        /** @var array<string, mixed> $event Описание одного регистрируемого обработчика. */
+        foreach ($events as $event) {
             $eventManager->registerEventHandlerCompatible(
                 $event['from_module'],
                 $event['event'],
@@ -72,18 +131,23 @@ final class EventRegistry
     }
 
     /**
-     * Удаляет все обработчики модуля из Bitrix.
+     * Удаляет переданный набор обработчиков по тем же сигнатурам, что использовались при регистрации.
      *
-     * Использует тот же реестр, что и установка, поэтому сигнатуры регистрации
-     * и удаления всегда остаются синхронизированными.
+     * @param array<int, array{
+     *     from_module: string,
+     *     event: string,
+     *     class: class-string,
+     *     method: string,
+     *     sort?: int
+     * }> $events Точный набор удаляемых обработчиков.
      */
-    public static function uninstall(): void
+    private static function unregisterEvents(array $events): void
     {
         /** @var EventManager $eventManager Менеджер удаления событий ядра D7. */
         $eventManager = EventManager::getInstance();
 
         /** @var array<string, mixed> $event Описание удаляемого обработчика. */
-        foreach (self::EVENTS as $event) {
+        foreach ($events as $event) {
             $eventManager->unRegisterEventHandler(
                 $event['from_module'],
                 $event['event'],

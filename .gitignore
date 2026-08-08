@@ -383,3 +383,6 @@ PROJECT_PLAN.md
 
 # Local generated diagrams
 /mermaid-diagram.svg
+
+# Published copies of module frontend assets (sources live in local/modules)
+/local/js/otus.autoservice/
