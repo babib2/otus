@@ -9,6 +9,7 @@ declare(strict_types=1);
 use Bitrix\Main\Application;
 use Bitrix\Main\Loader;
 use Otus\Autoservice\Model\CarTable;
+use Otus\Autoservice\Service\CarHistoryService;
 use Otus\Autoservice\Service\CarService;
 
 if (PHP_SAPI !== 'cli') {
@@ -176,6 +177,32 @@ try {
     $activeCarIds = array_map('intval', array_column($activeCars, 'ID'));
     if (!in_array($createdCarId, $activeCarIds, true)) {
         throw new RuntimeException('Created car is absent from active contact cars.');
+    }
+
+    /** @var CarHistoryService $historyService Проверка CRM-истории на временном автомобиле без сделок. */
+    $historyService = new CarHistoryService();
+
+    /** @var \Bitrix\Main\Result $historyResult Доступная администратору пустая страница истории. */
+    $historyResult = $historyService->getPage($createdCarId, 1, 1, 1, 5);
+    if (!$historyResult->isSuccess()) {
+        throw new RuntimeException(implode('; ', $historyResult->getErrorMessages()));
+    }
+
+    /** @var array<string, mixed> $historyData Структура ответа истории временного автомобиля. */
+    $historyData = $historyResult->getData();
+    if (
+        (int)($historyData['carId'] ?? 0) !== $createdCarId
+        || !is_array($historyData['items'] ?? null)
+        || $historyData['items'] !== []
+        || !is_array($historyData['pagination'] ?? null)
+    ) {
+        throw new RuntimeException('Empty car history response has an invalid shape.');
+    }
+
+    /** @var \Bitrix\Main\Result $anonymousHistoryResult Запрещённое чтение истории без пользователя. */
+    $anonymousHistoryResult = $historyService->getPage($createdCarId, 1, 0, 1, 5);
+    if ($anonymousHistoryResult->isSuccess()) {
+        throw new RuntimeException('Anonymous car history request was accepted.');
     }
 
     /** @var \Bitrix\Main\ORM\Data\UpdateResult $deactivateResult Результат мягкого удаления. */

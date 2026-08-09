@@ -39,6 +39,27 @@
         /** @type {?BX.PopupWindow} Текущая форма создания или изменения. */
         this.popup = null;
 
+        /** @type {?BX.PopupWindow} Открытое окно истории ремонтов автомобиля. */
+        this.historyPopup = null;
+
+        /** @type {Object<string, HTMLElement>} DOM-узлы открытой истории для постраничного дополнения. */
+        this.historyNodes = {};
+
+        /** @type {number} Автомобиль, история которого открыта в текущем окне. */
+        this.historyCarId = 0;
+
+        /** @type {number} Последняя успешно загруженная страница истории. */
+        this.historyPage = 0;
+
+        /** @type {boolean} Доступна ли следующая страница истории. */
+        this.historyHasMore = false;
+
+        /** @type {boolean} Выполняется ли сейчас запрос страницы истории. */
+        this.historyLoading = false;
+
+        /** @type {number} Версия AJAX-запроса, исключающая отрисовку ответа закрытого окна. */
+        this.historyRequestSerial = 0;
+
         /** @type {Object<string, HTMLInputElement>} Поля открытой формы. */
         this.formFields = {};
 
@@ -135,6 +156,18 @@
             this.popup.destroy();
             this.popup = null;
         }
+
+        this.historyRequestSerial++;
+        if (this.historyPopup)
+        {
+            this.historyPopup.destroy();
+            this.historyPopup = null;
+        }
+        this.historyNodes = {};
+        this.historyCarId = 0;
+        this.historyPage = 0;
+        this.historyHasMore = false;
+        this.historyLoading = false;
     };
 
     /**
@@ -258,6 +291,429 @@
         }).then(function (response) {
             this.openForm(response.data || {});
         }.bind(this)).catch(this.showRequestError.bind(this));
+    };
+
+    /**
+     * Открывает модальное окно и запрашивает первую страницу истории автомобиля.
+     *
+     * @param {number} carId Идентификатор автомобиля из строки GRID.
+     */
+    Garage.prototype.history = function (carId)
+    {
+        const normalizedCarId = parseInt(carId, 10) || 0;
+        if (normalizedCarId <= 0)
+        {
+            return;
+        }
+
+        if (this.historyPopup)
+        {
+            this.historyPopup.destroy();
+            this.historyPopup = null;
+        }
+
+        this.historyRequestSerial++;
+        this.historyCarId = normalizedCarId;
+        this.historyPage = 0;
+        this.historyHasMore = false;
+        this.historyLoading = false;
+
+        /** @type {HTMLDivElement} heading Узел точного заголовка автомобиля и клиента. */
+        const heading = BX.create('div', {
+            props: {className: 'otus-autoservice-history__heading'},
+            text: String(this.messages.historyTitle || ''),
+        });
+
+        /** @type {HTMLDivElement} status Узел состояния загрузки, пустого результата или ошибки. */
+        const status = BX.create('div', {
+            props: {className: 'otus-autoservice-history__status'},
+            text: String(this.messages.historyLoading || ''),
+        });
+
+        /** @type {HTMLDivElement} list Контейнер карточек доступных сервисных сделок. */
+        const list = BX.create('div', {
+            props: {className: 'otus-autoservice-history__list'},
+        });
+
+        /** @type {HTMLDivElement} footer Контейнер кнопки следующей страницы. */
+        const footer = BX.create('div', {
+            props: {className: 'otus-autoservice-history__footer'},
+        });
+
+        /** @type {HTMLDivElement} content Безопасно собранное DOM-содержимое окна истории. */
+        const content = BX.create('div', {
+            props: {className: 'otus-autoservice-history'},
+            children: [heading, status, list, footer],
+        });
+
+        this.historyNodes = {
+            heading: heading,
+            status: status,
+            list: list,
+            footer: footer,
+        };
+
+        /** @type {Garage} self Ссылка на экземпляр для совместимых обработчиков PopupWindow. */
+        const self = this;
+
+        /** @type {BX.PopupWindow} historyPopup Конкретный экземпляр для защиты от запоздалого destroy старого окна. */
+        const historyPopup = new BX.PopupWindow(
+            'otus-autoservice-history-' + this.contactId + '-' + normalizedCarId,
+            null,
+            {
+                titleBar: String(this.messages.historyTitle || ''),
+                content: content,
+                width: 960,
+                closeIcon: true,
+                closeByEsc: true,
+                overlay: true,
+                autoHide: false,
+                buttons: [
+                    new BX.PopupWindowButtonLink({
+                        text: String(this.messages.historyClose || ''),
+                        events: {
+                            click: function () {
+                                self.historyPopup.close();
+                            },
+                        },
+                    }),
+                ],
+                events: {
+                    onPopupClose: function (popupWindow) {
+                        popupWindow.destroy();
+                    },
+                    onPopupDestroy: function () {
+                        if (self.historyPopup !== historyPopup)
+                        {
+                            return;
+                        }
+
+                        self.historyRequestSerial++;
+                        self.historyPopup = null;
+                        self.historyNodes = {};
+                        self.historyCarId = 0;
+                        self.historyPage = 0;
+                        self.historyHasMore = false;
+                        self.historyLoading = false;
+                    },
+                },
+            }
+        );
+        this.historyPopup = historyPopup;
+        this.historyPopup.show();
+        this.loadHistoryPage(1, false);
+    };
+
+    /**
+     * Загружает и добавляет одну страницу истории, игнорируя ответ уже закрытого окна.
+     *
+     * @param {number} page Номер страницы, начиная с единицы.
+     * @param {boolean} append Добавлять ли сделки к уже показанным.
+     */
+    Garage.prototype.loadHistoryPage = function (page, append)
+    {
+        if (this.historyLoading || this.historyCarId <= 0 || !this.historyPopup)
+        {
+            return;
+        }
+
+        this.historyLoading = true;
+        this.setHistoryStatus(this.messages.historyLoading, false);
+        this.renderHistoryFooter();
+
+        /** @type {number} requestSerial Версия запроса для проверки актуальности Promise-ответа. */
+        const requestSerial = ++this.historyRequestSerial;
+
+        this.runAction('history', {
+            contactId: this.contactId,
+            id: this.historyCarId,
+            page: Math.max(1, parseInt(page, 10) || 1),
+            pageSize: 20,
+        }).then(function (response) {
+            if (requestSerial !== this.historyRequestSerial || !this.historyPopup)
+            {
+                return;
+            }
+
+            /** @type {Object} data Проверенные сервером данные страницы истории. */
+            const data = response && response.data ? response.data : {};
+
+            /** @type {Array<Object>} items Сервисные сделки текущей страницы. */
+            const items = Array.isArray(data.items) ? data.items : [];
+
+            if (!append)
+            {
+                this.historyNodes.list.innerHTML = '';
+                this.historyNodes.heading.textContent = String(
+                    data.title || this.messages.historyTitle || ''
+                );
+            }
+
+            items.forEach(function (deal) {
+                this.historyNodes.list.appendChild(this.createHistoryDeal(deal));
+            }.bind(this));
+
+            /** @type {Object} pagination Серверное состояние постраничной выборки. */
+            const pagination = data.pagination || {};
+            this.historyPage = parseInt(pagination.page, 10) || 1;
+            this.historyHasMore = pagination.hasMore === true;
+
+            if (this.historyNodes.list.children.length === 0)
+            {
+                this.setHistoryStatus(this.messages.historyEmpty, false);
+            }
+            else
+            {
+                this.setHistoryStatus('', false);
+            }
+        }.bind(this)).catch(function (response) {
+            if (requestSerial !== this.historyRequestSerial || !this.historyPopup)
+            {
+                return;
+            }
+
+            this.setHistoryStatus(this.getRequestErrorMessage(response), true);
+        }.bind(this)).finally(function () {
+            if (requestSerial !== this.historyRequestSerial || !this.historyPopup)
+            {
+                return;
+            }
+
+            this.historyLoading = false;
+            this.renderHistoryFooter();
+        }.bind(this));
+    };
+
+    /**
+     * Собирает карточку одной сделки исключительно DOM-методами с текстовым выводом.
+     *
+     * @param {Object} deal Проверенные сервером поля сделки и товарных позиций.
+     * @returns {HTMLDivElement}
+     */
+    Garage.prototype.createHistoryDeal = function (deal)
+    {
+        /** @type {number} dealId Числовой ID сделки для безопасного резервного заголовка. */
+        const dealId = parseInt(deal.id, 10) || 0;
+
+        /** @type {string} dealTitle Название сделки без HTML-интерпретации. */
+        const dealTitle = String(deal.title || ('#' + dealId));
+
+        /** @type {HTMLElement} titleNode Заголовок со ссылкой только при наличии штатного URL. */
+        const titleNode = deal.url
+            ? BX.create('a', {
+                props: {className: 'otus-autoservice-history__deal-title'},
+                attrs: {
+                    href: String(deal.url),
+                    target: '_blank',
+                    rel: 'noopener noreferrer',
+                },
+                text: dealTitle,
+            })
+            : BX.create('span', {
+                props: {className: 'otus-autoservice-history__deal-title'},
+                text: dealTitle,
+            });
+
+        /** @type {Object} assignedBy Ответственный без лишних пользовательских полей. */
+        const assignedBy = deal.assignedBy || {};
+
+        /** @type {HTMLElement} assignedNode Имя ответственного со ссылкой на профиль при наличии. */
+        const assignedNode = assignedBy.url
+            ? BX.create('a', {
+                attrs: {
+                    href: String(assignedBy.url),
+                    target: '_blank',
+                    rel: 'noopener noreferrer',
+                },
+                text: String(assignedBy.name || ''),
+            })
+            : BX.create('span', {text: String(assignedBy.name || '')});
+
+        /** @type {HTMLDivElement} details Основные реквизиты сервисной сделки. */
+        const details = BX.create('div', {
+            props: {className: 'otus-autoservice-history__details'},
+            children: [
+                this.createHistoryDetail(this.messages.historyDate, String(deal.dateCreated || '')),
+                this.createHistoryDetail(this.messages.historyStage, String(deal.stageName || '')),
+                this.createHistoryDetail(this.messages.historyAssigned, assignedNode),
+                this.createHistoryDetail(this.messages.historyAmount, String(deal.amountFormatted || '')),
+            ],
+        });
+
+        /** @type {Array<Object>} products Товарные позиции текущей сделки. */
+        const products = Array.isArray(deal.products) ? deal.products : [];
+
+        /** @type {HTMLElement} productContent Таблица запчастей либо сообщение об отсутствии строк. */
+        const productContent = products.length > 0
+            ? this.createHistoryProductTable(products)
+            : BX.create('div', {
+                props: {className: 'otus-autoservice-history__no-parts'},
+                text: String(this.messages.historyNoParts || ''),
+            });
+
+        /** @type {HTMLElement|null} dealLink Явная ссылка на карточку сделки из требований истории. */
+        const dealLink = deal.url
+            ? BX.create('a', {
+                props: {className: 'ui-btn ui-btn-light-border ui-btn-xs'},
+                attrs: {
+                    href: String(deal.url),
+                    target: '_blank',
+                    rel: 'noopener noreferrer',
+                },
+                text: String(this.messages.historyOpenDeal || ''),
+            })
+            : null;
+
+        return BX.create('div', {
+            props: {className: 'otus-autoservice-history__deal'},
+            children: [
+                BX.create('div', {
+                    props: {className: 'otus-autoservice-history__deal-header'},
+                    children: dealLink ? [titleNode, dealLink] : [titleNode],
+                }),
+                details,
+                BX.create('div', {
+                    props: {className: 'otus-autoservice-history__parts-title'},
+                    text: String(this.messages.historyParts || ''),
+                }),
+                productContent,
+            ],
+        });
+    };
+
+    /**
+     * Создаёт одну пару «подпись — значение» основных реквизитов сделки.
+     *
+     * @param {string} label Локализованная подпись.
+     * @param {string|HTMLElement} value Текст либо безопасно созданная ссылка.
+     * @returns {HTMLDivElement}
+     */
+    Garage.prototype.createHistoryDetail = function (label, value)
+    {
+        /** @type {HTMLElement} valueNode Нормализованный DOM-узел значения. */
+        const valueNode = typeof value === 'string'
+            ? BX.create('span', {text: value})
+            : value;
+
+        return BX.create('div', {
+            props: {className: 'otus-autoservice-history__detail'},
+            children: [
+                BX.create('span', {
+                    props: {className: 'otus-autoservice-history__detail-label'},
+                    text: String(label || ''),
+                }),
+                valueNode,
+            ],
+        });
+    };
+
+    /**
+     * Создаёт таблицу товарных позиций одной сделки без вставки произвольного HTML.
+     *
+     * @param {Array<Object>} products Запчасти, подготовленные серверным сервисом.
+     * @returns {HTMLDivElement}
+     */
+    Garage.prototype.createHistoryProductTable = function (products)
+    {
+        /** @type {HTMLTableSectionElement} body Строки товарных позиций. */
+        const body = BX.create('tbody');
+
+        products.forEach(function (product) {
+            /** @type {string} quantity Количество с необязательной единицей измерения. */
+            const quantity = [
+                String(product.quantityFormatted || ''),
+                String(product.measureName || ''),
+            ].filter(Boolean).join(' ');
+
+            body.appendChild(BX.create('tr', {
+                children: [
+                    BX.create('td', {text: String(product.name || '')}),
+                    BX.create('td', {text: quantity}),
+                    BX.create('td', {text: String(product.priceFormatted || '')}),
+                    BX.create('td', {text: String(product.sumFormatted || '')}),
+                ],
+            }));
+        });
+
+        return BX.create('div', {
+            props: {className: 'otus-autoservice-history__products-wrap'},
+            children: [
+                BX.create('table', {
+                    props: {className: 'otus-autoservice-history__products'},
+                    children: [
+                        BX.create('thead', {
+                            children: [
+                                BX.create('tr', {
+                                    children: [
+                                        BX.create('th', {text: String(this.messages.historyProduct || '')}),
+                                        BX.create('th', {text: String(this.messages.historyQuantity || '')}),
+                                        BX.create('th', {text: String(this.messages.historyPrice || '')}),
+                                        BX.create('th', {text: String(this.messages.historySum || '')}),
+                                    ],
+                                }),
+                            ],
+                        }),
+                        body,
+                    ],
+                }),
+            ],
+        });
+    };
+
+    /**
+     * Показывает текущее состояние истории либо скрывает пустой служебный блок.
+     *
+     * @param {string} message Текст загрузки, пустого результата или ошибки.
+     * @param {boolean} error Нужно ли оформить сообщение как ошибку.
+     */
+    Garage.prototype.setHistoryStatus = function (message, error)
+    {
+        if (!this.historyNodes.status)
+        {
+            return;
+        }
+
+        const normalizedMessage = String(message || '');
+        this.historyNodes.status.textContent = normalizedMessage;
+        this.historyNodes.status.style.display = normalizedMessage ? '' : 'none';
+        if (error === true)
+        {
+            BX.addClass(this.historyNodes.status, 'otus-autoservice-history__status--error');
+        }
+        else
+        {
+            BX.removeClass(this.historyNodes.status, 'otus-autoservice-history__status--error');
+        }
+    };
+
+    /**
+     * Перестраивает кнопку следующей страницы с учётом загрузки и hasMore.
+     */
+    Garage.prototype.renderHistoryFooter = function ()
+    {
+        if (!this.historyNodes.footer)
+        {
+            return;
+        }
+
+        this.historyNodes.footer.innerHTML = '';
+        if (!this.historyHasMore || this.historyLoading)
+        {
+            return;
+        }
+
+        this.historyNodes.footer.appendChild(BX.create('button', {
+            props: {
+                className: 'ui-btn ui-btn-light-border',
+                type: 'button',
+            },
+            text: String(this.messages.historyLoadMore || ''),
+            events: {
+                click: function () {
+                    this.loadHistoryPage(this.historyPage + 1, true);
+                }.bind(this),
+            },
+        }));
     };
 
     /**
@@ -488,7 +944,7 @@
      */
     Garage.prototype.runAction = function (action, data)
     {
-        if (action !== 'get')
+        if (['create', 'update', 'archive'].indexOf(action) !== -1)
         {
             data.originId = this.instanceId;
         }
@@ -517,12 +973,24 @@
      */
     Garage.prototype.showRequestError = function (response)
     {
-        const errors = response && Array.isArray(response.errors) ? response.errors : [];
-        const message = errors.length > 0 && errors[0].message
-            ? errors[0].message
-            : this.messages.requestFailed;
+        this.notify(this.getRequestErrorMessage(response), true);
+    };
 
-        this.notify(message, true);
+    /**
+     * Возвращает первый безопасный текст ошибки D7-контроллера или общее сообщение.
+     *
+     * @param {Object} response Отклонённый ответ BX.ajax.runAction.
+     * @returns {string}
+     */
+    Garage.prototype.getRequestErrorMessage = function (response)
+    {
+        const errors = response && Array.isArray(response.errors) ? response.errors : [];
+
+        return String(
+            errors.length > 0 && errors[0].message
+                ? errors[0].message
+                : this.messages.requestFailed
+        );
     };
 
     /**

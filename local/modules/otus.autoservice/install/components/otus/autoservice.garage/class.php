@@ -214,7 +214,16 @@ final class OtusAutoserviceGarageComponent extends CBitrixComponent
             $isActive = (string)$car['ACTIVE'] === 'Y';
 
             /** @var array<int, array<string, mixed>> $actions Разрешённые контекстные действия строки. */
-            $actions = [];
+            $actions = [
+                [
+                    'text' => (string)Loc::getMessage('OTUS_AUTOSERVICE_GARAGE_ACTION_HISTORY'),
+                    'onclick' => sprintf(
+                        "BX.Otus.Autoservice.Garage.get('%s').history(%d);",
+                        \CUtil::JSEscape($containerId),
+                        $carId
+                    ),
+                ],
+            ];
             if ($canEdit) {
                 $actions[] = [
                     'text' => (string)Loc::getMessage('OTUS_AUTOSERVICE_GARAGE_ACTION_EDIT'),

@@ -15,21 +15,25 @@ use Bitrix\Main\Engine\Controller;
 use Bitrix\Main\Error;
 use Bitrix\Main\Loader;
 use Bitrix\Main\Localization\Loc;
-use Bitrix\Main\ORM\Data\Result;
 use Bitrix\Main\Request;
+use Bitrix\Main\Result;
 use Otus\Autoservice\Logger\ModuleLogger;
+use Otus\Autoservice\Service\CarHistoryService;
 use Otus\Autoservice\Service\CarService;
 use Otus\Autoservice\Service\ModuleConfiguration;
 
 Loc::loadMessages(__FILE__);
 
 /**
- * Модульный D7-контроллер создания, чтения, изменения и архивирования автомобилей.
+ * Модульный D7-контроллер CRUD автомобилей и чтения истории сервисных сделок.
  */
 final class Car extends Controller
 {
     /** @var CarService Сервис бизнес-правил и ORM-операций автомобилей. */
     private $carService;
+
+    /** @var CarHistoryService Сервис защищённой пакетной истории ремонтов автомобиля. */
+    private $carHistoryService;
 
     /**
      * Создаёт контроллер со стандартным сервисом автомобилей.
@@ -38,6 +42,7 @@ final class Car extends Controller
     {
         parent::__construct($request);
         $this->carService = new CarService();
+        $this->carHistoryService = new CarHistoryService();
     }
 
     /**
@@ -56,6 +61,7 @@ final class Car extends Controller
 
         return [
             'get' => ['prefilters' => $mutationFilters],
+            'history' => ['prefilters' => $mutationFilters],
             'create' => ['prefilters' => $mutationFilters],
             'update' => ['prefilters' => $mutationFilters],
             'archive' => ['prefilters' => $mutationFilters],
@@ -85,6 +91,54 @@ final class Car extends Controller
         }
 
         return $this->formatCar($car);
+    }
+
+    /**
+     * Возвращает одну страницу доступных сервисных сделок и запчастей автомобиля.
+     *
+     * @param int $contactId Контакт из открытой карточки CRM.
+     * @param int $id        Автомобиль, для которого открывается история.
+     * @param int $page      Номер страницы истории, начиная с единицы.
+     * @param int $pageSize  Количество сделок на странице.
+     *
+     * @return array<string, mixed>|null Данные модального окна либо null с ошибками контроллера.
+     */
+    public function historyAction(
+        int $contactId,
+        int $id,
+        int $page = 1,
+        int $pageSize = CarHistoryService::DEFAULT_PAGE_SIZE
+    ): ?array {
+        if (!$this->ensureContactPermission($contactId, false)) {
+            return null;
+        }
+
+        /** @var int $userId Авторизованный пользователь, чьи CRM-права применяются к истории. */
+        $userId = (int)($this->getCurrentUser()?->getId() ?? 0);
+
+        /** @var Result $result Проверенная и постраничная история либо прикладная ошибка. */
+        $result = $this->carHistoryService->getPage(
+            $id,
+            $contactId,
+            $userId,
+            $page,
+            $pageSize
+        );
+
+        /** @var Error $error Очередная ошибка для отдельного аудита попытки доступа к чужой записи. */
+        foreach ($result->getErrors() as $error) {
+            if ($error->getCode() === CarHistoryService::ERROR_CAR_NOT_FOUND) {
+                $this->denyCarAccess($contactId, $id);
+
+                return null;
+            }
+        }
+
+        if (!$this->copyResultErrors($result)) {
+            return null;
+        }
+
+        return $result->getData();
     }
 
     /**
@@ -233,7 +287,13 @@ final class Car extends Controller
             ]
         );
         $this->addError(
-            new Error((string)Loc::getMessage('OTUS_AUTOSERVICE_CAR_ACCESS_DENIED'))
+            new Error(
+                (string)Loc::getMessage(
+                    $update
+                        ? 'OTUS_AUTOSERVICE_CAR_ACCESS_DENIED'
+                        : 'OTUS_AUTOSERVICE_CAR_READ_ACCESS_DENIED'
+                )
+            )
         );
 
         return false;

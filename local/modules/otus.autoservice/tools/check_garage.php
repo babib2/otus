@@ -15,6 +15,7 @@ use Otus\Autoservice\EventHandler\ContactGarageTabHandler;
 use Otus\Autoservice\Integration\Crm\GarageComponentManager;
 use Otus\Autoservice\Migration\MigrationManager;
 use Otus\Autoservice\Model\CarTable;
+use Otus\Autoservice\Service\CarHistoryService;
 use Otus\Autoservice\Service\CarPullService;
 use Otus\Autoservice\Service\CarService;
 use Otus\Autoservice\Service\DealOpenOrderService;
@@ -59,7 +60,7 @@ if (
 }
 
 /** @var string $garageMigrationVersion Версия миграции, впервые устанавливающей вкладку. */
-$garageMigrationVersion = '202608080005';
+$garageMigrationVersion = '202608090006';
 
 /** @var string $currentSchemaVersion Последняя успешно применённая миграция модуля. */
 $currentSchemaVersion = MigrationManager::getCurrentVersion();
@@ -131,20 +132,32 @@ foreach ($eventManager->findEventHandlers('crm', 'onEntityDetailsTabsInitialized
 
 /** @var bool $serverClassesReady Доступны ли сервис, контроллер и все его публичные CRUD-действия. */
 $serverClassesReady = class_exists(CarService::class)
+    && class_exists(CarHistoryService::class)
     && class_exists(Car::class)
     && method_exists(Car::class, 'getAction')
     && method_exists(Car::class, 'createAction')
     && method_exists(Car::class, 'updateAction')
     && method_exists(Car::class, 'archiveAction')
+    && method_exists(Car::class, 'historyAction')
     && method_exists(DealOpenOrderService::class, 'hasOpenOrderForCar');
 
 /** @var array{0: object, 1: string}|null $controllerRoute Разрешённый ядром маршрут модульного AJAX-контроллера. */
 $controllerRoute = Resolver::getControllerAndAction('otus', ModuleConfiguration::MODULE_ID, 'api.Car.create');
 
+/** @var array{0: object, 1: string}|null $historyControllerRoute Маршрут чтения истории тем же контроллером. */
+$historyControllerRoute = Resolver::getControllerAndAction(
+    'otus',
+    ModuleConfiguration::MODULE_ID,
+    'api.Car.history'
+);
+
 /** @var bool $controllerRouteReady Ведёт ли строка из BX.ajax.runAction к требуемому контроллеру и действию. */
 $controllerRouteReady = is_array($controllerRoute)
     && ($controllerRoute[0] ?? null) instanceof Car
-    && ($controllerRoute[1] ?? null) === 'create';
+    && ($controllerRoute[1] ?? null) === 'create'
+    && is_array($historyControllerRoute)
+    && ($historyControllerRoute[0] ?? null) instanceof Car
+    && ($historyControllerRoute[1] ?? null) === 'history';
 
 /** @var string $firstPullTag Непрогнозируемый тег первого тестового контакта. */
 $firstPullTag = CarPullService::getWatchTag(1);
