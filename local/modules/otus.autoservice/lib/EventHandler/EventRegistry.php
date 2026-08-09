@@ -9,12 +9,28 @@ declare(strict_types=1);
 namespace Otus\Autoservice\EventHandler;
 
 use Bitrix\Main\EventManager;
+use Bitrix\Main\Loader;
+use Bitrix\Rest\Engine\ScopeManager;
+use Otus\Autoservice\Integration\Rest\CarRestService;
 
 /**
  * Централизованно регистрирует и удаляет обработчики событий модуля.
  */
 final class EventRegistry
 {
+    /**
+     * Описание обработчика, публикующего отдельный REST scope и CRUD автомобилей.
+     *
+     * @var array{from_module: string, event: string, class: class-string, method: string, sort: int}
+     */
+    private const CAR_REST_SERVICE_EVENT = [
+        'from_module' => 'rest',
+        'event' => 'OnRestServiceBuildDescription',
+        'class' => CarRestService::class,
+        'method' => 'onRestServiceBuildDescription',
+        'sort' => 100,
+    ];
+
     /**
      * Описание обработчика вкладки «Гараж» в карточке CRM-контакта.
      *
@@ -74,6 +90,7 @@ final class EventRegistry
         ],
         self::DEAL_CAR_SELECTOR_ASSET_EVENT,
         self::CONTACT_GARAGE_TAB_EVENT,
+        self::CAR_REST_SERVICE_EVENT,
     ];
 
     /**
@@ -86,6 +103,7 @@ final class EventRegistry
     public static function install(): void
     {
         self::registerEvents(self::EVENTS);
+        self::clearRestScopeCache();
     }
 
     /**
@@ -97,6 +115,7 @@ final class EventRegistry
     public static function uninstall(): void
     {
         self::unregisterEvents(self::EVENTS);
+        self::clearRestScopeCache();
     }
 
     /**
@@ -129,6 +148,37 @@ final class EventRegistry
     public static function uninstallContactGarageTab(): void
     {
         self::unregisterEvents([self::CONTACT_GARAGE_TAB_EVENT]);
+    }
+
+    /**
+     * Регистрирует REST API автомобилей при обновлении уже установленного модуля.
+     */
+    public static function installCarRestApi(): void
+    {
+        self::registerEvents([self::CAR_REST_SERVICE_EVENT]);
+        self::clearRestScopeCache();
+    }
+
+    /**
+     * Удаляет только обработчик REST API при откате его миграции.
+     */
+    public static function uninstallCarRestApi(): void
+    {
+        self::unregisterEvents([self::CAR_REST_SERVICE_EVENT]);
+        self::clearRestScopeCache();
+    }
+
+    /**
+     * Очищает семидневный кеш REST scope после добавления или удаления обработчика.
+     *
+     * Метод находится в общем реестре, чтобы одинаково работать для миграции,
+     * новой установки и обычного удаления модуля с сохранением данных.
+     */
+    private static function clearRestScopeCache(): void
+    {
+        if (Loader::includeModule('rest')) {
+            ScopeManager::cleanCache();
+        }
     }
 
     /**

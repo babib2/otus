@@ -36,6 +36,9 @@ final class ModuleLogger
     /** Идентификатор некритичной ошибки публикации PushPull-события. */
     public const AUDIT_CAR_PULL_FAILED = 'OTUS_AUTOSERVICE_CAR_PULL_FAILED';
 
+    /** Идентификатор скрытой от клиента внутренней ошибки REST API автомобилей. */
+    public const AUDIT_CAR_REST_FAILED = 'OTUS_AUTOSERVICE_CAR_REST_FAILED';
+
     /**
      * Записывает предупреждение, не прерывая основной CRM-сценарий.
      *
