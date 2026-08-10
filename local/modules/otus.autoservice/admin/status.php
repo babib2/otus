@@ -11,6 +11,7 @@ use Bitrix\Main\Context;
 use Bitrix\Main\Loader;
 use Bitrix\Main\Localization\Loc;
 use Bitrix\Main\ModuleManager;
+use Otus\Autoservice\Integration\Catalog\SparePartsCatalogManager;
 use Otus\Autoservice\Integration\Crm\DealCarFieldManager;
 use Otus\Autoservice\Integration\Crm\ServiceDealPipelineManager;
 use Otus\Autoservice\Migration\MigrationManager;
@@ -62,7 +63,13 @@ $applyMigrationsRequested = $request->getPost('apply_migrations') === 'Y';
 /** @var bool $repairPipelineRequested Запрошено ли восстановление конфигурации сервисной воронки. */
 $repairPipelineRequested = $request->getPost('repair_pipeline') === 'Y';
 
-if ($request->isPost() && ($applyMigrationsRequested || $repairPipelineRequested)) {
+/** @var bool $repairSparePartsCatalogRequested Запрошено ли восстановление инфраструктуры каталога. */
+$repairSparePartsCatalogRequested = $request->getPost('repair_spare_parts_catalog') === 'Y';
+
+if (
+    $request->isPost()
+    && ($applyMigrationsRequested || $repairPipelineRequested || $repairSparePartsCatalogRequested)
+) {
     if ($moduleRight < 'W') {
         $migrationMessage = [
             'MESSAGE' => (string)Loc::getMessage('OTUS_AUTOSERVICE_STATUS_MIGRATION_ACCESS_DENIED'),
@@ -79,25 +86,35 @@ if ($request->isPost() && ($applyMigrationsRequested || $repairPipelineRequested
                 // Сначала применяются возможные миграции, затем повторно сверяется CRM-конфигурация.
                 MigrationManager::migrate();
                 (new ServiceDealPipelineManager())->repair();
+            } elseif ($repairSparePartsCatalogRequested) {
+                // Миграции создают основу, а повторный ensure восстанавливает удалённые объекты каталога.
+                MigrationManager::migrate();
+                (new SparePartsCatalogManager())->ensureExists();
             } else {
                 MigrationManager::migrate();
             }
 
+            /** @var string $successMessageCode Код локализованного сообщения об успешном действии. */
+            $successMessageCode = match (true) {
+                $repairPipelineRequested => 'OTUS_AUTOSERVICE_STATUS_PIPELINE_REPAIR_SUCCESS',
+                $repairSparePartsCatalogRequested => 'OTUS_AUTOSERVICE_STATUS_SPARE_PARTS_REPAIR_SUCCESS',
+                default => 'OTUS_AUTOSERVICE_STATUS_MIGRATION_SUCCESS',
+            };
+
             $migrationMessage = [
-                'MESSAGE' => (string)Loc::getMessage(
-                    $repairPipelineRequested
-                        ? 'OTUS_AUTOSERVICE_STATUS_PIPELINE_REPAIR_SUCCESS'
-                        : 'OTUS_AUTOSERVICE_STATUS_MIGRATION_SUCCESS'
-                ),
+                'MESSAGE' => (string)Loc::getMessage($successMessageCode),
                 'TYPE' => 'OK',
             ];
         } catch (Throwable $exception) {
+            /** @var string $errorMessageCode Код локализованного сообщения об ошибке действия. */
+            $errorMessageCode = match (true) {
+                $repairPipelineRequested => 'OTUS_AUTOSERVICE_STATUS_PIPELINE_REPAIR_ERROR',
+                $repairSparePartsCatalogRequested => 'OTUS_AUTOSERVICE_STATUS_SPARE_PARTS_REPAIR_ERROR',
+                default => 'OTUS_AUTOSERVICE_STATUS_MIGRATION_ERROR',
+            };
+
             $migrationMessage = [
-                'MESSAGE' => (string)Loc::getMessage(
-                    $repairPipelineRequested
-                        ? 'OTUS_AUTOSERVICE_STATUS_PIPELINE_REPAIR_ERROR'
-                        : 'OTUS_AUTOSERVICE_STATUS_MIGRATION_ERROR'
-                ),
+                'MESSAGE' => (string)Loc::getMessage($errorMessageCode),
                 'DETAILS' => htmlspecialcharsbx($exception->getMessage()),
                 'TYPE' => 'ERROR',
             ];
@@ -139,6 +156,14 @@ $managedServiceCategoryId = $servicePipelineManager->getManagedCategoryId();
 
 /** @var bool $servicePipelineReady Созданы ли направление и все стадии сервиса. */
 $servicePipelineReady = $servicePipelineManager->isReady();
+
+/** @var bool $sparePartsCatalogReady Настроены ли каталог, свойство артикула и склад. */
+$sparePartsCatalogReady = false;
+try {
+    $sparePartsCatalogReady = (new SparePartsCatalogManager())->isReady();
+} catch (Throwable) {
+    // Конфликт внешних ID показывается как неготовая конфигурация, не ломая административную страницу.
+}
 ?>
 <div class="adm-detail-content-wrap">
     <?php if ($migrationMessage !== null): ?>
@@ -262,6 +287,22 @@ $servicePipelineReady = $servicePipelineManager->isReady();
                             ))?>
                     </td>
                 </tr>
+                <tr>
+                    <td class="adm-detail-content-cell-l">
+                        <?=htmlspecialcharsbx((string)Loc::getMessage(
+                            'OTUS_AUTOSERVICE_STATUS_SPARE_PARTS_CATALOG'
+                        ))?>
+                    </td>
+                    <td class="adm-detail-content-cell-r">
+                        <?=$sparePartsCatalogReady
+                            ? htmlspecialcharsbx((string)Loc::getMessage(
+                                'OTUS_AUTOSERVICE_STATUS_SPARE_PARTS_CATALOG_READY'
+                            ))
+                            : htmlspecialcharsbx((string)Loc::getMessage(
+                                'OTUS_AUTOSERVICE_STATUS_SPARE_PARTS_CATALOG_NOT_READY'
+                            ))?>
+                    </td>
+                </tr>
                 </tbody>
             </table>
 
@@ -283,6 +324,20 @@ $servicePipelineReady = $servicePipelineManager->isReady();
                             $hasPendingMigrations
                                 ? 'OTUS_AUTOSERVICE_STATUS_APPLY_MIGRATIONS'
                                 : 'OTUS_AUTOSERVICE_STATUS_REPAIR_PIPELINE'
+                        ))?>"
+                    >
+                </form>
+            <?php endif; ?>
+
+            <?php if (!$hasPendingMigrations && !$sparePartsCatalogReady && $moduleRight >= 'W'): ?>
+                <form method="post" action="<?=htmlspecialcharsbx($APPLICATION->GetCurPageParam('', []))?>">
+                    <?=bitrix_sessid_post()?>
+                    <input type="hidden" name="repair_spare_parts_catalog" value="Y">
+                    <input
+                        type="submit"
+                        class="adm-btn-save"
+                        value="<?=htmlspecialcharsbx((string)Loc::getMessage(
+                            'OTUS_AUTOSERVICE_STATUS_REPAIR_SPARE_PARTS_CATALOG'
                         ))?>"
                     >
                 </form>

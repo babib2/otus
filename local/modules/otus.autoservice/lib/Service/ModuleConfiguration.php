@@ -80,6 +80,15 @@ final class ModuleConfiguration
      */
     public const OPTION_DEAL_CAR_FIELD_OWNED = 'deal_car_field_owned';
 
+    /** ID штатного CRM-каталога, выбранного для хранения запчастей автосервиса. */
+    public const OPTION_SPARE_PARTS_CATALOG_ID = 'spare_parts_catalog_id';
+
+    /** ID строкового свойства каталога, в котором хранится артикул запчасти. */
+    public const OPTION_SPARE_PARTS_ARTICLE_PROPERTY_ID = 'spare_parts_article_property_id';
+
+    /** ID демонстрационного склада, однозначно помеченного внешним кодом модуля. */
+    public const OPTION_SPARE_PARTS_STORE_ID = 'spare_parts_store_id';
+
     /**
      * Стабильный код поля связи CRM-сделки с автомобилем из ORM-таблицы.
      */
@@ -183,6 +192,36 @@ final class ModuleConfiguration
     }
 
     /**
+     * Возвращает выбранный миграцией штатный каталог запчастей.
+     *
+     * @return int|null Положительный ID инфоблока-каталога либо null при отсутствии настройки.
+     */
+    public static function getSparePartsCatalogId(): ?int
+    {
+        return self::getPositiveIntegerOption(self::OPTION_SPARE_PARTS_CATALOG_ID);
+    }
+
+    /**
+     * Возвращает созданное модулем свойство артикула в каталоге запчастей.
+     *
+     * @return int|null Положительный ID свойства инфоблока либо null при отсутствии настройки.
+     */
+    public static function getSparePartsArticlePropertyId(): ?int
+    {
+        return self::getPositiveIntegerOption(self::OPTION_SPARE_PARTS_ARTICLE_PROPERTY_ID);
+    }
+
+    /**
+     * Возвращает демонстрационный склад, используемый последующей синхронизацией остатков.
+     *
+     * @return int|null Положительный ID склада каталога либо null при отсутствии настройки.
+     */
+    public static function getSparePartsStoreId(): ?int
+    {
+        return self::getPositiveIntegerOption(self::OPTION_SPARE_PARTS_STORE_ID);
+    }
+
+    /**
      * Возвращает допустимые уровни журналирования для проверки и построения формы.
      *
      * @return string[]
@@ -190,5 +229,32 @@ final class ModuleConfiguration
     public static function getAllowedLogLevels(): array
     {
         return self::ALLOWED_LOG_LEVELS;
+    }
+
+    /**
+     * Строго читает положительный целочисленный идентификатор из настройки модуля.
+     *
+     * Повреждённое, отрицательное или дробное значение не передаётся сервисам каталога.
+     *
+     * @param string $optionName Имя технической настройки с идентификатором сущности Bitrix.
+     *
+     * @return int|null Проверенный положительный ID либо null.
+     */
+    private static function getPositiveIntegerOption(string $optionName): ?int
+    {
+        /** @var string $rawValue Сырое строковое значение из b_option. */
+        $rawValue = Option::get(self::MODULE_ID, $optionName, '');
+        if (preg_match('/^[1-9][0-9]*$/D', $rawValue) !== 1) {
+            return null;
+        }
+
+        /** @var int $identifier Преобразованный идентификатор в диапазоне PHP integer. */
+        $identifier = (int)$rawValue;
+
+        if ($identifier <= 0 || (string)$identifier !== $rawValue) {
+            return null;
+        }
+
+        return $identifier;
     }
 }

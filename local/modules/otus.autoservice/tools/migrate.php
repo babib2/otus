@@ -8,6 +8,7 @@ declare(strict_types=1);
 
 use Bitrix\Main\Application;
 use Bitrix\Main\Loader;
+use Otus\Autoservice\Integration\Catalog\SparePartsCatalogManager;
 use Otus\Autoservice\Integration\Crm\DealCarFieldManager;
 use Otus\Autoservice\Integration\Crm\ServiceDealPipelineManager;
 use Otus\Autoservice\Migration\MigrationManager;
@@ -83,16 +84,27 @@ try {
     /** @var bool $servicePipelineReady Созданы ли сервисная воронка и её стадии. */
     $servicePipelineReady = (new ServiceDealPipelineManager())->isReady();
 
+    /** @var bool $sparePartsCatalogReady Настроены ли каталог, свойство артикула и склад. */
+    $sparePartsCatalogReady = (new SparePartsCatalogManager())->isReady();
+
     printf(
-        "Schema after: %s; car table: %s; deal car field: %s; service pipeline: %s%s",
+        "Schema after: %s; car table: %s; deal car field: %s; service pipeline: %s; spare-parts catalog: %s%s",
         MigrationManager::getCurrentVersion(),
         $tableExists ? 'OK' : 'NOT FOUND',
         $dealCarFieldExists ? 'OK' : 'NOT FOUND',
         $servicePipelineReady ? 'OK' : 'NOT READY',
+        $sparePartsCatalogReady ? 'OK' : 'NOT READY',
         PHP_EOL
     );
 
-    exit($tableExists && $dealCarFieldExists && $servicePipelineReady ? 0 : 1);
+    exit(
+        $tableExists
+        && $dealCarFieldExists
+        && $servicePipelineReady
+        && $sparePartsCatalogReady
+            ? 0
+            : 1
+    );
 } catch (Throwable $exception) {
     fwrite(STDERR, 'Migration failed: ' . $exception->getMessage() . PHP_EOL);
     exit(1);

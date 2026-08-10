@@ -36,6 +36,7 @@ final class MigrationManager
         Version202608080005InstallContactGarage::class,
         Version202608090006PublishCarHistory::class,
         Version202608090007RegisterCarRestApi::class,
+        Version202608090008CreateSparePartsCatalog::class,
     ];
 
     /**
