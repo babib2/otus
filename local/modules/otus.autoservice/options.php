@@ -65,6 +65,7 @@ if ($request->isPost() && check_bitrix_sessid()) {
             [
                 ModuleConfiguration::OPTION_ENABLED,
                 ModuleConfiguration::OPTION_LOG_LEVEL,
+                ModuleConfiguration::OPTION_STOCK_PROVIDER,
             ] as $optionName
         ) {
             /** @var string $optionName Очередная пользовательская настройка для сброса. */
@@ -103,6 +104,14 @@ if ($request->isPost() && check_bitrix_sessid()) {
             $logLevel = 'error';
         }
 
+        /** @var string $stockProviderCode Запрошенный код источника внешних остатков. */
+        $stockProviderCode = (string)$request->getPost(ModuleConfiguration::OPTION_STOCK_PROVIDER);
+        if (!in_array($stockProviderCode, ModuleConfiguration::getAllowedStockProviderCodes(), true)) {
+            $optionErrors[] = (string)Loc::getMessage(
+                'OTUS_AUTOSERVICE_OPTIONS_STOCK_PROVIDER_INVALID'
+            );
+        }
+
         /** @var string $categoryIdValue ID выбранного направления либо пустая строка. */
         $categoryIdValue = trim(
             (string)$request->getPost(ModuleConfiguration::OPTION_SERVICE_DEAL_CATEGORY_ID)
@@ -123,6 +132,11 @@ if ($request->isPost() && check_bitrix_sessid()) {
         if ($optionErrors === []) {
             Option::set($moduleId, ModuleConfiguration::OPTION_ENABLED, $enabled);
             Option::set($moduleId, ModuleConfiguration::OPTION_LOG_LEVEL, $logLevel);
+            Option::set(
+                $moduleId,
+                ModuleConfiguration::OPTION_STOCK_PROVIDER,
+                $stockProviderCode
+            );
 
             if ($categoryIdValue === '') {
                 Option::delete(
@@ -170,6 +184,9 @@ $enabled = ModuleConfiguration::isEnabled();
 
 /** @var string $logLevel Текущий проверенный уровень журналирования. */
 $logLevel = ModuleConfiguration::getLogLevel();
+
+/** @var string $stockProviderCode Текущий проверенный код источника внешних остатков. */
+$stockProviderCode = ModuleConfiguration::getStockProviderCode();
 
 /** @var int|null $serviceCategoryId Выбранное направление сервисного обслуживания. */
 $serviceCategoryId = ModuleConfiguration::getServiceDealCategoryId();
@@ -219,6 +236,38 @@ $dealCarFieldName = ModuleConfiguration::getDealCarFieldName();
                     </option>
                 <?php endforeach; ?>
             </select>
+        </td>
+    </tr>
+    <tr>
+        <td width="40%">
+            <label for="otus-autoservice-stock-provider">
+                <?=htmlspecialcharsbx((string)Loc::getMessage(
+                    'OTUS_AUTOSERVICE_OPTIONS_STOCK_PROVIDER'
+                ))?>
+            </label>
+        </td>
+        <td width="60%">
+            <select
+                id="otus-autoservice-stock-provider"
+                name="<?=htmlspecialcharsbx(ModuleConfiguration::OPTION_STOCK_PROVIDER)?>"
+            >
+                <?php /** @var string $allowedStockProviderCode Код очередного встроенного поставщика. */ ?>
+                <?php foreach (ModuleConfiguration::getAllowedStockProviderCodes() as $allowedStockProviderCode): ?>
+                    <option
+                        value="<?=htmlspecialcharsbx($allowedStockProviderCode)?>"
+                        <?=$allowedStockProviderCode === $stockProviderCode ? 'selected' : ''?>
+                    >
+                        <?=htmlspecialcharsbx((string)Loc::getMessage(
+                            'OTUS_AUTOSERVICE_OPTIONS_STOCK_PROVIDER_' . strtoupper($allowedStockProviderCode)
+                        ))?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
+            <div class="adm-info-message-wrap">
+                <?=htmlspecialcharsbx((string)Loc::getMessage(
+                    'OTUS_AUTOSERVICE_OPTIONS_STOCK_PROVIDER_HELP'
+                ))?>
+            </div>
         </td>
     </tr>
     <tr>

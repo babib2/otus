@@ -89,6 +89,24 @@ final class ModuleConfiguration
     /** ID демонстрационного склада, однозначно помеченного внешним кодом модуля. */
     public const OPTION_SPARE_PARTS_STORE_ID = 'spare_parts_store_id';
 
+    /** Имя пользовательской настройки с кодом источника внешних остатков. */
+    public const OPTION_STOCK_PROVIDER = 'stock_provider';
+
+    /** Unix-время последнего запуска, полностью получившего остатки всех запчастей. */
+    public const OPTION_STOCK_SYNC_LAST_SUCCESS_AT = 'stock_sync_last_success_at';
+
+    /** Код HTTP-поставщика демонстрационных остатков Random.org. */
+    public const STOCK_PROVIDER_RANDOM_ORG = 'random_org';
+
+    /** Код локального предсказуемого поставщика для разработки и тестов. */
+    public const STOCK_PROVIDER_FAKE = 'fake';
+
+    /** Поставщик внешних остатков, используемый до первого сохранения настроек. */
+    public const DEFAULT_STOCK_PROVIDER = self::STOCK_PROVIDER_RANDOM_ORG;
+
+    /** Допустимое опережение часов сервера при чтении даты полного успеха в секундах. */
+    private const STOCK_SYNC_FUTURE_TOLERANCE_SECONDS = 300;
+
     /**
      * Стабильный код поля связи CRM-сделки с автомобилем из ORM-таблицы.
      */
@@ -109,6 +127,16 @@ final class ModuleConfiguration
         'warning', // Некритичные отклонения, требующие внимания администратора.
         'info',    // Основные этапы успешного выполнения бизнес-сценариев.
         'debug',   // Подробные технические данные для локальной диагностики.
+    ];
+
+    /**
+     * Белый список встроенных поставщиков, доступных в административной форме.
+     *
+     * @var string[]
+     */
+    private const ALLOWED_STOCK_PROVIDERS = [
+        self::STOCK_PROVIDER_RANDOM_ORG,
+        self::STOCK_PROVIDER_FAKE,
     ];
 
     /**
@@ -219,6 +247,71 @@ final class ModuleConfiguration
     public static function getSparePartsStoreId(): ?int
     {
         return self::getPositiveIntegerOption(self::OPTION_SPARE_PARTS_STORE_ID);
+    }
+
+    /**
+     * Возвращает проверенный код поставщика внешних остатков.
+     *
+     * Повреждённое или устаревшее значение из b_option не передаётся фабрике:
+     * вместо него выбирается встроенный HTTP-поставщик по умолчанию.
+     *
+     * @return string Один из кодов, перечисленных в ALLOWED_STOCK_PROVIDERS.
+     */
+    public static function getStockProviderCode(): string
+    {
+        /** @var string $providerCode Сырое значение настройки поставщика из b_option. */
+        $providerCode = Option::get(
+            self::MODULE_ID,
+            self::OPTION_STOCK_PROVIDER,
+            self::DEFAULT_STOCK_PROVIDER
+        );
+
+        if (!in_array($providerCode, self::ALLOWED_STOCK_PROVIDERS, true)) {
+            return self::DEFAULT_STOCK_PROVIDER;
+        }
+
+        return $providerCode;
+    }
+
+    /**
+     * Возвращает коды встроенных поставщиков для проверки и построения формы.
+     *
+     * @return string[] Новый массив кодов, изменение которого не влияет на конфигурацию класса.
+     */
+    public static function getAllowedStockProviderCodes(): array
+    {
+        return self::ALLOWED_STOCK_PROVIDERS;
+    }
+
+    /**
+     * Возвращает дату последней полностью успешной синхронизации остатков.
+     *
+     * Значение хранится как Unix-время, чтобы не зависеть от формата даты и часового
+     * пояса сайта. Повреждённое, нереалистичное или существенно будущее значение игнорируется.
+     */
+    public static function getStockSyncLastSuccessAt(): ?\Bitrix\Main\Type\DateTime
+    {
+        /** @var string $rawTimestamp Сырое значение Unix-времени из b_option. */
+        $rawTimestamp = Option::get(
+            self::MODULE_ID,
+            self::OPTION_STOCK_SYNC_LAST_SUCCESS_AT,
+            ''
+        );
+        if (preg_match('/^[1-9][0-9]*$/D', $rawTimestamp) !== 1) {
+            return null;
+        }
+
+        /** @var int $timestamp Проверенное числовое Unix-время. */
+        $timestamp = (int)$rawTimestamp;
+        if (
+            $timestamp <= 0
+            || (string)$timestamp !== $rawTimestamp
+            || $timestamp > time() + self::STOCK_SYNC_FUTURE_TOLERANCE_SECONDS
+        ) {
+            return null;
+        }
+
+        return \Bitrix\Main\Type\DateTime::createFromTimestamp($timestamp);
     }
 
     /**
