@@ -34,6 +34,7 @@ Loader::registerAutoLoadClasses(
         'Otus\\Autoservice\\Integration\\Stock\\FakeStockProvider' => 'lib/Integration/Stock/FakeStockProvider.php',
         'Otus\\Autoservice\\Integration\\Stock\\RandomOrgStockProvider' => 'lib/Integration/Stock/RandomOrgStockProvider.php',
         'Otus\\Autoservice\\Integration\\Stock\\StockProviderFactory' => 'lib/Integration/Stock/StockProviderFactory.php',
+        'Otus\\Autoservice\\Integration\\Stock\\StockQuantityUpdaterInterface' => 'lib/Integration/Stock/StockQuantityUpdaterInterface.php',
         'Otus\\Autoservice\\Integration\\UI\\EntitySelector\\CarProvider' => 'lib/Integration/UI/EntitySelector/CarProvider.php',
         'Otus\\Autoservice\\Integration\\Rest\\CarRestService' => 'lib/Integration/Rest/CarRestService.php',
         'Otus\\Autoservice\\Logger\\ModuleLogger' => 'lib/Logger/ModuleLogger.php',
@@ -50,6 +51,7 @@ Loader::registerAutoLoadClasses(
         'Otus\\Autoservice\\Migration\\Version202608090007RegisterCarRestApi' => 'lib/Migration/Version202608090007RegisterCarRestApi.php',
         'Otus\\Autoservice\\Migration\\Version202608090008CreateSparePartsCatalog' => 'lib/Migration/Version202608090008CreateSparePartsCatalog.php',
         'Otus\\Autoservice\\Migration\\Version202608110009CreateStockSyncTables' => 'lib/Migration/Version202608110009CreateStockSyncTables.php',
+        'Otus\\Autoservice\\Migration\\Version202608110010ExtendStockSyncItems' => 'lib/Migration/Version202608110010ExtendStockSyncItems.php',
         'Otus\\Autoservice\\Model\\CarTable' => 'lib/Model/CarTable.php',
         'Otus\\Autoservice\\Model\\SyncRunTable' => 'lib/Model/SyncRunTable.php',
         'Otus\\Autoservice\\Model\\SyncItemTable' => 'lib/Model/SyncItemTable.php',
@@ -60,6 +62,7 @@ Loader::registerAutoLoadClasses(
         'Otus\\Autoservice\\Service\\CarPullService' => 'lib/Service/CarPullService.php',
         'Otus\\Autoservice\\Service\\DealOpenOrderService' => 'lib/Service/DealOpenOrderService.php',
         'Otus\\Autoservice\\Service\\StockSyncService' => 'lib/Service/StockSyncService.php',
+        'Otus\\Autoservice\\Service\\StockQuantityService' => 'lib/Service/StockQuantityService.php',
         'Otus\\Autoservice\\Service\\ModuleConfiguration' => 'lib/Service/ModuleConfiguration.php',
         'Otus\\Autoservice\\Service\\ModuleRequirements' => 'lib/Service/ModuleRequirements.php',
     ]

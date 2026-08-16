@@ -13,13 +13,16 @@ use Bitrix\Main\Config\Option;
 use Bitrix\Main\DB\Connection;
 use Bitrix\Main\Loader;
 use Bitrix\Main\Localization\Loc;
+use Bitrix\Main\Result;
 use Bitrix\Main\Type\DateTime;
 use InvalidArgumentException;
 use Otus\Autoservice\Integration\Catalog\SparePartsCatalogManager;
 use Otus\Autoservice\Integration\Stock\StockBatchFetcher;
 use Otus\Autoservice\Integration\Stock\StockFetchResult;
 use Otus\Autoservice\Integration\Stock\StockItem;
+use Otus\Autoservice\Integration\Stock\StockProviderInterface;
 use Otus\Autoservice\Integration\Stock\StockProviderFactory;
+use Otus\Autoservice\Integration\Stock\StockQuantityUpdaterInterface;
 use Otus\Autoservice\Migration\MigrationManager;
 use Otus\Autoservice\Model\SyncItemTable;
 use Otus\Autoservice\Model\SyncRunTable;
@@ -30,11 +33,11 @@ use Throwable;
 Loc::loadMessages(__FILE__);
 
 /**
- * Выполняет один последовательный запуск без изменения реальных остатков Bitrix.
+ * Выполняет один последовательный запуск с применением полученных абсолютных остатков Bitrix.
  *
- * Внешние запросы выполняются вне транзакций. Короткая транзакция охватывает только
- * массовую запись результатов порции и обновление счётчиков запуска. Именованная
- * блокировка СУБД не хранит отдельную сущность и исключает параллельный cron.
+ * Внешние запросы выполняются вне транзакций. Успешное изменение одной запчасти и её
+ * аудит фиксируются одной транзакцией; ошибки получения и применения сохраняются отдельно.
+ * Именованная блокировка СУБД не хранит отдельную сущность и исключает параллельный cron.
  */
 final class StockSyncService
 {
@@ -56,25 +59,33 @@ final class StockSyncService
     /** Машинный тип повреждённых обязательных идентификаторов запчасти. */
     public const ERROR_INVALID_CATALOG_ITEM = 'invalid_catalog_item';
 
+    /** Допуск определения фактического движения по количествам применителя. */
+    private const APPLY_QUANTITY_EPSILON = 0.00001;
+
     /** Фабрика настроенного либо явно внедрённого источника остатков. */
     private StockProviderFactory $providerFactory;
 
     /** Необязательный внедрённый репозиторий; null означает текущую конфигурацию каталога. */
     private ?SparePartStockRepository $repository;
 
+    /** Необязательный заменяемый применитель количества; null означает штатный каталог Bitrix. */
+    private ?StockQuantityUpdaterInterface $quantityUpdater;
+
     /**
-     * Создаёт сервис с возможностью заменить поставщика и репозиторий в диагностике.
+     * Создаёт сервис с возможностью заменить поставщика, репозиторий и применитель в диагностике.
      */
     public function __construct(
         ?StockProviderFactory $providerFactory = null,
-        ?SparePartStockRepository $repository = null
+        ?SparePartStockRepository $repository = null,
+        ?StockQuantityUpdaterInterface $quantityUpdater = null
     ) {
         $this->providerFactory = $providerFactory ?? new StockProviderFactory();
         $this->repository = $repository;
+        $this->quantityUpdater = $quantityUpdater;
     }
 
     /**
-     * Получает остатки всех запчастей и сохраняет поштучные результаты запуска.
+     * Получает, применяет и журналирует абсолютные остатки всех запчастей.
      *
      * @param string      $initiator Код `cli` или `admin` для аудита источника запуска.
      * @param int         $batchSize Число сканируемых товаров каталога в одной порции.
@@ -90,12 +101,17 @@ final class StockSyncService
         $this->validateRunArguments($initiator, $batchSize);
         $this->ensureEnvironmentReady();
 
-        /** @var \Otus\Autoservice\Integration\Stock\StockProviderInterface $provider Выбранный источник абсолютных остатков. */
+        /** @var StockProviderInterface $provider Выбранный источник абсолютных остатков. */
         $provider = $this->providerFactory->create($providerCode);
         /** @var SparePartStockRepository $repository Пакетный источник запчастей CRM-каталога. */
         $repository = $this->repository ?? new SparePartStockRepository();
         /** @var StockBatchFetcher $fetcher Изолирует ожидаемые ошибки отдельных товаров. */
         $fetcher = new StockBatchFetcher($provider);
+        /**
+         * @var StockQuantityUpdaterInterface $quantityUpdater
+         * Применяет абсолютный остаток выбранным штатным способом.
+         */
+        $quantityUpdater = $this->quantityUpdater ?? new StockQuantityService();
         /** @var Connection $connection Соединение для именованной блокировки и транзакций. */
         $connection = Application::getConnection();
 
@@ -109,9 +125,9 @@ final class StockSyncService
         $runId = null;
         /** @var int $totalItems Число фактически найденных запчастей. */
         $totalItems = 0;
-        /** @var int $successItems Число успешных ответов поставщика. */
+        /** @var int $successItems Число успешно полученных, применённых и проверенных остатков. */
         $successItems = 0;
-        /** @var int $failedItems Число ошибок поставщика или идентификаторов. */
+        /** @var int $failedItems Число ошибок идентификаторов, поставщика или применения. */
         $failedItems = 0;
 
         try {
@@ -122,7 +138,7 @@ final class StockSyncService
             $afterProductId = 0;
 
             while (true) {
-                /** @var array{items: array<int, array{product_id: int, external_id: string, article: string}>, last_product_id: int, scanned_count: int} $batch Порция каталога и новый курсор. */
+                /** @var array<string, mixed> $batch Порция каталога и новый курсор. */
                 $batch = $repository->fetchBatch($afterProductId, $batchSize);
                 if ($batch['scanned_count'] === 0) {
                     break;
@@ -143,16 +159,9 @@ final class StockSyncService
                 $validItems = [];
                 /** @var array<int, array<string, mixed>> $invalidItemFields Готовые строки повреждённых товаров. */
                 $invalidItemFields = [];
-                /** @var int $batchTotalItems Число запчастей текущей ещё не сохранённой порции. */
-                $batchTotalItems = 0;
-                /** @var int $batchSuccessItems Успешные результаты текущей ещё не сохранённой порции. */
-                $batchSuccessItems = 0;
-                /** @var int $batchFailedItems Ошибки текущей ещё не сохранённой порции. */
-                $batchFailedItems = 0;
 
-                /** @var array{product_id: int, external_id: string, article: string} $candidate Очередная запчасть из репозитория. */
+                /** @var array<string, mixed> $candidate Очередная запчасть из репозитория. */
                 foreach ($batch['items'] as $candidate) {
-                    $batchTotalItems++;
                     try {
                         $validItems[] = new StockItem(
                             $candidate['product_id'],
@@ -160,45 +169,111 @@ final class StockSyncService
                             $candidate['article']
                         );
                     } catch (InvalidArgumentException) {
-                        $batchFailedItems++;
                         $invalidItemFields[] = $this->buildInvalidItemFields($runId, $candidate);
                     }
                 }
 
                 /** @var StockFetchResult[] $fetchResults Поштучные ответы и ожидаемые ошибки поставщика. */
                 $fetchResults = $fetcher->fetch($validItems);
-                /** @var array<int, array<string, mixed>> $itemFields Все строки текущей транзакции. */
-                $itemFields = $invalidItemFields;
+
+                /** @var array<string, mixed> $invalidItemField Ошибка идентификаторов без изменения каталога. */
+                foreach ($invalidItemFields as $invalidItemField) {
+                    $this->persistFailure(
+                        $connection,
+                        $runId,
+                        $invalidItemField,
+                        $totalItems + 1,
+                        $successItems,
+                        $failedItems + 1
+                    );
+                    $totalItems++;
+                    $failedItems++;
+                }
 
                 /** @var StockFetchResult $fetchResult Очередной ответ поставщика. */
                 foreach ($fetchResults as $fetchResult) {
-                    $itemFields[] = $this->buildFetchResultFields($runId, $fetchResult);
-                    if ($fetchResult->isSuccess()) {
-                        $batchSuccessItems++;
-                    } else {
-                        $batchFailedItems++;
+                    if (!$fetchResult->isSuccess()) {
+                        $this->persistFailure(
+                            $connection,
+                            $runId,
+                            $this->buildFetchResultFields($runId, $fetchResult),
+                            $totalItems + 1,
+                            $successItems,
+                            $failedItems + 1
+                        );
+                        $totalItems++;
+                        $failedItems++;
+                        continue;
                     }
+
+                    /** @var int $externalQuantity Полученный абсолютный остаток успешного ответа. */
+                    $externalQuantity = (int)$fetchResult->getQuantity();
+                    /** @var Result|null $committedApplyResult Результат, записанный callback до коммита. */
+                    $committedApplyResult = null;
+                    /** @var Result $applyResult Штатный результат применения количества к каталогу. */
+                    $applyResult = $quantityUpdater->apply(
+                        $fetchResult->getItem(),
+                        $externalQuantity,
+                        function (Result $successfulResult) use (
+                            $runId,
+                            $fetchResult,
+                            $totalItems,
+                            $successItems,
+                            $failedItems,
+                            &$committedApplyResult
+                        ): void {
+                            if (!$successfulResult->isSuccess() || $committedApplyResult !== null) {
+                                throw new RuntimeException(
+                                    'Stock updater invoked transactional callback incorrectly.'
+                                );
+                            }
+                            /** @var array<string, mixed> $successFields Проверенная строка применения. */
+                            $successFields = $this->buildAppliedResultFields(
+                                $runId,
+                                $fetchResult,
+                                $successfulResult
+                            );
+                            $this->persistAppliedSuccess(
+                                $runId,
+                                $successFields,
+                                $totalItems + 1,
+                                $successItems + 1,
+                                $failedItems
+                            );
+                            $committedApplyResult = $successfulResult;
+                        }
+                    );
+                    if ($applyResult->isSuccess()) {
+                        if ($committedApplyResult !== $applyResult) {
+                            throw new RuntimeException(
+                                'Successful stock updater did not invoke transactional callback.'
+                            );
+                        }
+                        $totalItems++;
+                        $successItems++;
+                        continue;
+                    }
+                    if ($committedApplyResult !== null) {
+                        throw new RuntimeException(
+                            'Stock updater returned failure after committing successful audit.'
+                        );
+                    }
+
+                    $this->persistFailure(
+                        $connection,
+                        $runId,
+                        $this->buildAppliedResultFields(
+                            $runId,
+                            $fetchResult,
+                            $applyResult
+                        ),
+                        $totalItems + 1,
+                        $successItems,
+                        $failedItems + 1
+                    );
+                    $totalItems++;
+                    $failedItems++;
                 }
-
-                /** @var int $newTotalItems Итоговый счётчик после возможного коммита порции. */
-                $newTotalItems = $totalItems + $batchTotalItems;
-                /** @var int $newSuccessItems Итоговый успешный счётчик после возможного коммита. */
-                $newSuccessItems = $successItems + $batchSuccessItems;
-                /** @var int $newFailedItems Итоговый ошибочный счётчик после возможного коммита. */
-                $newFailedItems = $failedItems + $batchFailedItems;
-
-                $this->persistBatch(
-                    $connection,
-                    $runId,
-                    $itemFields,
-                    $newTotalItems,
-                    $newSuccessItems,
-                    $newFailedItems
-                );
-                // Локальные счётчики меняются только после успешного коммита строк и прогресса запуска.
-                $totalItems = $newTotalItems;
-                $successItems = $newSuccessItems;
-                $failedItems = $newFailedItems;
             }
 
             /** @var string $finalStatus Итоговый статус по наличию поштучных ошибок. */
@@ -407,11 +482,11 @@ final class StockSyncService
     }
 
     /**
-     * Атомарно сохраняет поштучные результаты и согласованные счётчики порции.
+     * Атомарно сохраняет одну поштучную ошибку и согласованные счётчики запуска.
      *
-     * @param array<int, array<string, mixed>> $itemFields Строки SyncItemTable.
+     * @param array<string, mixed> $itemFields Поля единственной ошибочной строки SyncItemTable.
      */
-    private function persistBatch(
+    private function persistFailure(
         Connection $connection,
         int $runId,
         array $itemFields,
@@ -421,12 +496,10 @@ final class StockSyncService
     ): void {
         $connection->startTransaction();
         try {
-            if ($itemFields !== []) {
-                /** @var \Bitrix\Main\ORM\Data\AddResult $addResult Результат одной массовой вставки порции. */
-                $addResult = SyncItemTable::addMulti($itemFields);
-                if (!$addResult->isSuccess()) {
-                    throw new RuntimeException($this->formatOrmError($addResult->getErrorMessages()));
-                }
+            /** @var \Bitrix\Main\ORM\Data\AddResult $addResult Результат записи поштучной ошибки. */
+            $addResult = SyncItemTable::add($itemFields);
+            if (!$addResult->isSuccess() || (int)$addResult->getId() <= 0) {
+                throw new RuntimeException($this->formatOrmError($addResult->getErrorMessages()));
             }
 
             $this->updateRunOrThrow(
@@ -443,6 +516,35 @@ final class StockSyncService
             $connection->rollbackTransaction();
             throw $exception;
         }
+    }
+
+    /**
+     * Записывает одну успешную позицию и прогресс внутри транзакции, открытой применителем.
+     *
+     * @param array<string, mixed> $itemFields Поля единственной успешной строки журнала.
+     */
+    private function persistAppliedSuccess(
+        int $runId,
+        array $itemFields,
+        int $totalItems,
+        int $successItems,
+        int $failedItems
+    ): void {
+        /** @var \Bitrix\Main\ORM\Data\AddResult $addResult Результат записи аудита позиции. */
+        $addResult = SyncItemTable::add($itemFields);
+        if (!$addResult->isSuccess() || (int)$addResult->getId() <= 0) {
+            throw new RuntimeException($this->formatOrmError($addResult->getErrorMessages()));
+        }
+
+        $this->updateRunOrThrow(
+            $runId,
+            [
+                'TOTAL_ITEMS' => $totalItems,
+                'SUCCESS_ITEMS' => $successItems,
+                'FAILED_ITEMS' => $failedItems,
+                'HEARTBEAT_AT' => new DateTime(),
+            ]
+        );
     }
 
     /** Обновляет heartbeat при порции без запчастей. */
@@ -469,29 +571,216 @@ final class StockSyncService
         /** @var StockItem $item Товар, которому соответствует результат. */
         $item = $result->getItem();
         if ($result->isSuccess()) {
-            return [
+            throw new RuntimeException('Successful fetch result must be applied before journaling.');
+        }
+
+        return array_merge(
+            [
                 'RUN_ID' => $runId,
                 'PRODUCT_ID' => $item->getProductId(),
                 'EXTERNAL_ID' => $item->getExternalId(),
                 'ARTICLE' => $item->getArticle(),
-                'STATUS' => SyncItemTable::STATUS_SUCCESS,
-                'EXTERNAL_QUANTITY' => $result->getQuantity(),
-                'ERROR_TYPE' => null,
-                'ERROR_MESSAGE' => null,
-                'RETRYABLE' => 'N',
-            ];
+                'STATUS' => SyncItemTable::STATUS_FAILED,
+                'EXTERNAL_QUANTITY' => null,
+                'ERROR_TYPE' => $result->getErrorType(),
+                'ERROR_MESSAGE' => $result->getErrorMessage(),
+                'RETRYABLE' => $result->isRetryable() ? 'Y' : 'N',
+            ],
+            $this->buildEmptyApplyFields()
+        );
+    }
+
+    /**
+     * Формирует строку журнала после попытки применить успешно полученное количество.
+     */
+    private function buildAppliedResultFields(
+        int $runId,
+        StockFetchResult $fetchResult,
+        Result $applyResult
+    ): array {
+        /** @var StockItem $item Запчасть успешного ответа внешнего поставщика. */
+        $item = $fetchResult->getItem();
+        /** @var array<string, mixed> $applyData Исходные и итоговые количества штатного применителя. */
+        $applyData = $applyResult->getData();
+        /** @var array<string, mixed> $applyFields Нормализованные nullable-поля ORM-журнала. */
+        $applyFields = $this->normalizeApplyFields($applyData, $applyResult->isSuccess());
+
+        if ($applyResult->isSuccess()) {
+            if (
+                abs(
+                    (float)$applyFields['APPLIED_STORE_QUANTITY']
+                    - (float)$fetchResult->getQuantity()
+                ) > 0.00001
+            ) {
+                throw new RuntimeException(
+                    'Successful stock updater did not confirm requested absolute quantity.'
+                );
+            }
+
+            return array_merge(
+                [
+                    'RUN_ID' => $runId,
+                    'PRODUCT_ID' => $item->getProductId(),
+                    'EXTERNAL_ID' => $item->getExternalId(),
+                    'ARTICLE' => $item->getArticle(),
+                    'STATUS' => SyncItemTable::STATUS_SUCCESS,
+                    'EXTERNAL_QUANTITY' => $fetchResult->getQuantity(),
+                    'ERROR_TYPE' => null,
+                    'ERROR_MESSAGE' => null,
+                    'RETRYABLE' => 'N',
+                ],
+                $applyFields
+            );
         }
 
+        /** @var \Bitrix\Main\Error|null $firstError Первая машинная ошибка применения. */
+        $firstError = $applyResult->getError();
+        /** @var string $errorType Ограниченный машинный код поштучного сбоя. */
+        $errorType = $firstError === null ? '' : trim((string)$firstError->getCode());
+        if ($errorType === '') {
+            $errorType = StockQuantityService::ERROR_API_FAILED;
+        }
+
+        return array_merge(
+            [
+                'RUN_ID' => $runId,
+                'PRODUCT_ID' => $item->getProductId(),
+                'EXTERNAL_ID' => $item->getExternalId(),
+                'ARTICLE' => $item->getArticle(),
+                'STATUS' => SyncItemTable::STATUS_FAILED,
+                // Полученный остаток сохраняется даже тогда, когда каталог его не применил.
+                'EXTERNAL_QUANTITY' => $fetchResult->getQuantity(),
+                'ERROR_TYPE' => mb_substr($errorType, 0, 64),
+                'ERROR_MESSAGE' => $this->formatOrmError(
+                    $applyResult->getErrorMessages(),
+                    'OTUS_AUTOSERVICE_STOCK_SYNC_APPLY_ERROR'
+                ),
+                'RETRYABLE' => 'N',
+            ],
+            $applyFields
+        );
+    }
+
+    /**
+     * Преобразует данные Result применителя в точные поля SyncItemTable.
+     *
+     * Успешная реализация интерфейса обязана вернуть полный набор: нарушение контракта
+     * является программной ошибкой и останавливает запуск вместо ложного успеха.
+     */
+    private function normalizeApplyFields(array $data, bool $required): array
+    {
+        /** @var array<string, mixed> $fields Пустой либо заполненный набор новых колонок. */
+        $fields = $this->buildEmptyApplyFields();
+        if ($data === []) {
+            if ($required) {
+                throw new RuntimeException('Successful stock updater returned no journal data.');
+            }
+
+            return $fields;
+        }
+
+        /** @var int $storeId Проверенный положительный ID склада. */
+        $storeId = (int)($data['store_id'] ?? 0);
+        /** @var string $mode Непустой ограниченный код способа обновления. */
+        $mode = trim((string)($data['mode'] ?? ''));
+        /** @var mixed $previousStoreQuantity Исходный физический остаток склада. */
+        $previousStoreQuantity = $data['previous_store_quantity'] ?? null;
+        /** @var mixed $appliedStoreQuantity Фактически применённый физический остаток. */
+        $appliedStoreQuantity = $data['applied_store_quantity'] ?? null;
+        /** @var mixed $previousProductQuantity Исходное доступное количество товара. */
+        $previousProductQuantity = $data['previous_product_quantity'] ?? null;
+        /** @var mixed $appliedProductQuantity Итоговое доступное количество товара. */
+        $appliedProductQuantity = $data['applied_product_quantity'] ?? null;
+        /** @var bool $documentIdPresent Передал ли применитель обязательное поле документа. */
+        $documentIdPresent = array_key_exists('document_id', $data);
+        /** @var mixed $documentIdValue ID проведённого документа в исходном контракте. */
+        $documentIdValue = $data['document_id'] ?? null;
+        /** @var bool $documentIdValueValid Документ представлен null либо положительным целым ID. */
+        $documentIdValueValid = $documentIdPresent
+            && (
+                $documentIdValue === null
+                || (is_int($documentIdValue) && $documentIdValue > 0)
+            );
+        /** @var int $documentId Нормализованный положительный ID либо 0. */
+        $documentId = is_int($documentIdValue) && $documentIdValue > 0
+            ? $documentIdValue
+            : 0;
+
+        if (
+            $required
+            && (
+                $storeId <= 0
+                || !in_array(
+                    $mode,
+                    [
+                        StockQuantityService::MODE_DIRECT_API,
+                        StockQuantityService::MODE_INVENTORY_DOCUMENT,
+                    ],
+                    true
+                )
+                || !is_numeric($previousStoreQuantity)
+                || !is_numeric($appliedStoreQuantity)
+                || !is_numeric($previousProductQuantity)
+                || !is_numeric($appliedProductQuantity)
+            )
+        ) {
+            throw new RuntimeException('Successful stock updater returned incomplete journal data.');
+        }
+
+        if ($required) {
+            /** @var bool $hasStoreMovement Изменился ли физический остаток склада. */
+            $hasStoreMovement = abs(
+                (float)$appliedStoreQuantity - (float)$previousStoreQuantity
+            ) > self::APPLY_QUANTITY_EPSILON;
+            /** @var bool $documentContractValid Соответствует ли документ заявленному режиму. */
+            $documentContractValid = $documentIdValueValid
+                && (
+                    (
+                        $mode === StockQuantityService::MODE_DIRECT_API
+                        && $documentId === 0
+                    )
+                    || (
+                        $mode === StockQuantityService::MODE_INVENTORY_DOCUMENT
+                        && ($hasStoreMovement ? $documentId > 0 : $documentId === 0)
+                    )
+                );
+            if (!$documentContractValid) {
+                throw new RuntimeException(
+                    'Successful stock updater returned inconsistent document data.'
+                );
+            }
+        }
+
+        $fields['STORE_ID'] = $storeId > 0 ? $storeId : null;
+        $fields['APPLY_MODE'] = $mode === '' ? null : mb_substr($mode, 0, 32);
+        $fields['PREVIOUS_STORE_QUANTITY'] = is_numeric($previousStoreQuantity)
+            ? (float)$previousStoreQuantity
+            : null;
+        $fields['APPLIED_STORE_QUANTITY'] = is_numeric($appliedStoreQuantity)
+            ? (float)$appliedStoreQuantity
+            : null;
+        $fields['PREVIOUS_PRODUCT_QUANTITY'] = is_numeric($previousProductQuantity)
+            ? (float)$previousProductQuantity
+            : null;
+        $fields['APPLIED_PRODUCT_QUANTITY'] = is_numeric($appliedProductQuantity)
+            ? (float)$appliedProductQuantity
+            : null;
+        $fields['DOCUMENT_ID'] = $documentId > 0 ? $documentId : null;
+
+        return $fields;
+    }
+
+    /** Возвращает полный nullable-набор колонок применения для единообразного ORM-аудита. */
+    private function buildEmptyApplyFields(): array
+    {
         return [
-            'RUN_ID' => $runId,
-            'PRODUCT_ID' => $item->getProductId(),
-            'EXTERNAL_ID' => $item->getExternalId(),
-            'ARTICLE' => $item->getArticle(),
-            'STATUS' => SyncItemTable::STATUS_FAILED,
-            'EXTERNAL_QUANTITY' => null,
-            'ERROR_TYPE' => $result->getErrorType(),
-            'ERROR_MESSAGE' => $result->getErrorMessage(),
-            'RETRYABLE' => $result->isRetryable() ? 'Y' : 'N',
+            'STORE_ID' => null,
+            'APPLY_MODE' => null,
+            'PREVIOUS_STORE_QUANTITY' => null,
+            'APPLIED_STORE_QUANTITY' => null,
+            'PREVIOUS_PRODUCT_QUANTITY' => null,
+            'APPLIED_PRODUCT_QUANTITY' => null,
+            'DOCUMENT_ID' => null,
         ];
     }
 
@@ -502,19 +791,22 @@ final class StockSyncService
      */
     private function buildInvalidItemFields(int $runId, array $candidate): array
     {
-        return [
-            'RUN_ID' => $runId,
-            'PRODUCT_ID' => $candidate['product_id'],
-            'EXTERNAL_ID' => $candidate['external_id'] === '' ? null : $candidate['external_id'],
-            'ARTICLE' => $candidate['article'] === '' ? null : $candidate['article'],
-            'STATUS' => SyncItemTable::STATUS_FAILED,
-            'EXTERNAL_QUANTITY' => null,
-            'ERROR_TYPE' => self::ERROR_INVALID_CATALOG_ITEM,
-            'ERROR_MESSAGE' => (string)Loc::getMessage(
-                'OTUS_AUTOSERVICE_STOCK_SYNC_INVALID_ITEM'
-            ),
-            'RETRYABLE' => 'N',
-        ];
+        return array_merge(
+            [
+                'RUN_ID' => $runId,
+                'PRODUCT_ID' => $candidate['product_id'],
+                'EXTERNAL_ID' => $candidate['external_id'] === '' ? null : $candidate['external_id'],
+                'ARTICLE' => $candidate['article'] === '' ? null : $candidate['article'],
+                'STATUS' => SyncItemTable::STATUS_FAILED,
+                'EXTERNAL_QUANTITY' => null,
+                'ERROR_TYPE' => self::ERROR_INVALID_CATALOG_ITEM,
+                'ERROR_MESSAGE' => (string)Loc::getMessage(
+                    'OTUS_AUTOSERVICE_STOCK_SYNC_INVALID_ITEM'
+                ),
+                'RETRYABLE' => 'N',
+            ],
+            $this->buildEmptyApplyFields()
+        );
     }
 
     /** Обновляет одну запись запуска и преобразует ошибки ORM в исключение. */
@@ -556,8 +848,11 @@ final class StockSyncService
         }
     }
 
-    /** Объединяет сообщения ORM, оставляя запасной безопасный текст. */
-    private function formatOrmError(array $messages): string
+    /** Объединяет сообщения Result, оставляя выбранный запасной безопасный текст. */
+    private function formatOrmError(
+        array $messages,
+        string $fallbackMessageKey = 'OTUS_AUTOSERVICE_STOCK_SYNC_ORM_ERROR'
+    ): string
     {
         /** @var string[] $normalizedMessages Непустые скалярные сообщения ORM. */
         $normalizedMessages = array_values(
@@ -570,7 +865,7 @@ final class StockSyncService
         );
 
         if ($normalizedMessages === []) {
-            return (string)Loc::getMessage('OTUS_AUTOSERVICE_STOCK_SYNC_ORM_ERROR');
+            return (string)Loc::getMessage($fallbackMessageKey);
         }
 
         return implode('; ', $normalizedMessages);

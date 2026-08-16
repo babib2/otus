@@ -9,19 +9,23 @@ declare(strict_types=1);
 use Bitrix\Catalog\ProductTable;
 use Bitrix\Main\Application;
 use Bitrix\Main\Config\Option;
+use Bitrix\Main\Error;
 use Bitrix\Main\Loader;
 use Bitrix\Main\Localization\Loc;
+use Bitrix\Main\Result;
 use Bitrix\Main\Type\DateTime;
 use Otus\Autoservice\Integration\Stock\StockItem;
 use Otus\Autoservice\Integration\Stock\StockProviderException;
 use Otus\Autoservice\Integration\Stock\StockProviderFactory;
 use Otus\Autoservice\Integration\Stock\StockProviderInterface;
+use Otus\Autoservice\Integration\Stock\StockQuantityUpdaterInterface;
 use Otus\Autoservice\Migration\MigrationManager;
 use Otus\Autoservice\Model\SyncItemTable;
 use Otus\Autoservice\Model\SyncRunTable;
 use Otus\Autoservice\Repository\SparePartStockRepository;
 use Otus\Autoservice\Service\ModuleConfiguration;
 use Otus\Autoservice\Service\StockSyncService;
+use Otus\Autoservice\Service\StockQuantityService;
 
 if (PHP_SAPI !== 'cli') {
     // Диагностика раскрывает технические ID и поэтому никогда не публикуется через HTTP.
@@ -222,6 +226,9 @@ function assertSuccessfulRun(int $runId, int $expectedItems, int $expectedQuanti
             '=RUN_ID' => $runId,
             '=STATUS' => SyncItemTable::STATUS_SUCCESS,
             '=EXTERNAL_QUANTITY' => $expectedQuantity,
+            '=STORE_ID' => ModuleConfiguration::getSparePartsStoreId(),
+            '=APPLY_MODE' => StockQuantityService::MODE_DIRECT_API,
+            '=APPLIED_STORE_QUANTITY' => (float)$expectedQuantity,
             '=RETRYABLE' => 'N',
         ]
     );
@@ -273,6 +280,54 @@ function assertPartialRun(int $runId, int $expectedItems): void
         ) === $expectedItems - 1
         && SyncItemTable::getCount(['=RUN_ID' => $runId]) === $expectedItems,
         (string)Loc::getMessage('OTUS_AUTOSERVICE_CHECK_STOCK_SYNC_PARTIAL_ITEM_INVALID')
+    );
+}
+
+/**
+ * Проверяет, что единичная ошибка применения остатка не прерывает обработку порции.
+ *
+ * @param int $runId ID диагностического запуска.
+ * @param int $expectedItems Ожидаемое число запчастей.
+ * @param int $expectedQuantity Полученный от поставщика абсолютный остаток.
+ */
+function assertApplyPartialRun(int $runId, int $expectedItems, int $expectedQuantity): void
+{
+    /** @var array<string, mixed>|false $run Итоговая строка запуска с одной ошибкой применения. */
+    $run = SyncRunTable::getByPrimary($runId)->fetch();
+    /** @var array<string, mixed>|false $failedItem Единственная строка ошибки применения. */
+    $failedItem = SyncItemTable::getList(
+        [
+            'select' => [
+                'EXTERNAL_QUANTITY',
+                'ERROR_TYPE',
+                'ERROR_MESSAGE',
+                'RETRYABLE',
+                'STORE_ID',
+                'APPLIED_STORE_QUANTITY',
+            ],
+            'filter' => ['=RUN_ID' => $runId, '=STATUS' => SyncItemTable::STATUS_FAILED],
+            'limit' => 2,
+        ]
+    )->fetch();
+
+    assertStockSyncCondition(
+        $run !== false
+        && (string)$run['STATUS'] === SyncRunTable::STATUS_COMPLETED_WITH_ERRORS
+        && (int)$run['TOTAL_ITEMS'] === $expectedItems
+        && (int)$run['SUCCESS_ITEMS'] === $expectedItems - 1
+        && (int)$run['FAILED_ITEMS'] === 1
+        && $failedItem !== false
+        && (int)$failedItem['EXTERNAL_QUANTITY'] === $expectedQuantity
+        && (string)$failedItem['ERROR_TYPE'] === StockQuantityService::ERROR_API_FAILED
+        && trim((string)$failedItem['ERROR_MESSAGE']) !== ''
+        && (string)$failedItem['RETRYABLE'] === 'N'
+        && $failedItem['STORE_ID'] === null
+        && $failedItem['APPLIED_STORE_QUANTITY'] === null
+        && SyncItemTable::getCount(
+            ['=RUN_ID' => $runId, '=STATUS' => SyncItemTable::STATUS_SUCCESS]
+        ) === $expectedItems - 1
+        && SyncItemTable::getCount(['=RUN_ID' => $runId]) === $expectedItems,
+        (string)Loc::getMessage('OTUS_AUTOSERVICE_CHECK_STOCK_SYNC_APPLY_PARTIAL_INVALID')
     );
 }
 
@@ -354,6 +409,7 @@ try {
             'diagnostic_failure_' . $diagnosticToken,
             'diagnostic_stale_' . $diagnosticToken,
             'diagnostic_crash_' . $diagnosticToken,
+            'diagnostic_contract_' . $diagnosticToken,
         ];
         $originalLastSuccess = Option::getRealValue(
             ModuleConfiguration::MODULE_ID,
@@ -365,6 +421,50 @@ try {
 
         /** @var array<int, float> $quantitiesBefore Количества каталога до запусков диагностики. */
         $quantitiesBefore = loadCatalogQuantities($productIds);
+
+        /** @var int|null $diagnosticStoreId Настроенный склад для правдоподобных данных fake-применителя. */
+        $diagnosticStoreId = ModuleConfiguration::getSparePartsStoreId();
+        assertStockSyncCondition(
+            $diagnosticStoreId !== null,
+            (string)Loc::getMessage('OTUS_AUTOSERVICE_CHECK_STOCK_SYNC_REPOSITORY_INVALID')
+        );
+        /** @var StockQuantityUpdaterInterface $fakeQuantityUpdater Не изменяет каталог, но проверяет контракт оркестратора. */
+        $fakeQuantityUpdater = new class($diagnosticStoreId) implements StockQuantityUpdaterInterface {
+            /** ID склада, переносимый в поштучный диагностический журнал. */
+            private int $storeId;
+
+            /** Сохраняет положительный настроенный ID склада. */
+            public function __construct(int $storeId)
+            {
+                $this->storeId = $storeId;
+            }
+
+            /** Возвращает полный успешный Result без изменения реального каталога. */
+            public function apply(
+                StockItem $item,
+                int $absoluteQuantity,
+                ?\Closure $transactionalSuccessCallback = null
+            ): Result {
+                /** @var Result $result Предсказуемые данные контракта StockSyncService. */
+                $result = new Result();
+                $result->setData(
+                    [
+                        'store_id' => $this->storeId,
+                        'mode' => StockQuantityService::MODE_DIRECT_API,
+                        'previous_store_quantity' => 0.0,
+                        'applied_store_quantity' => (float)$absoluteQuantity,
+                        'previous_product_quantity' => 0.0,
+                        'applied_product_quantity' => (float)$absoluteQuantity,
+                        'document_id' => null,
+                    ]
+                );
+                if ($transactionalSuccessCallback !== null) {
+                    $transactionalSuccessCallback($result);
+                }
+
+                return $result;
+            }
+        };
 
         /** @var string $successProviderCode Уникальный код успешного поставщика текущего процесса. */
         $successProviderCode = $diagnosticProviderCodes[0];
@@ -394,7 +494,8 @@ try {
         /** @var StockSyncService $successService Сервис с полностью успешным локальным поставщиком. */
         $successService = new StockSyncService(
             new StockProviderFactory([$successProvider]),
-            $repository
+            $repository,
+            $fakeQuantityUpdater
         );
         /** @var int $successRunId ID полностью успешного диагностического запуска. */
         $successRunId = $successService->run(
@@ -455,7 +556,8 @@ try {
         /** @var StockSyncService $partialService Сервис для проверки продолжения после ошибки. */
         $partialService = new StockSyncService(
             new StockProviderFactory([$partialProvider]),
-            $repository
+            $repository,
+            $fakeQuantityUpdater
         );
         /** @var int $partialRunId ID частично успешного диагностического запуска. */
         $partialRunId = $partialService->run(
@@ -472,6 +574,168 @@ try {
                 ''
             ) === $successfulTimestamp,
             (string)Loc::getMessage('OTUS_AUTOSERVICE_CHECK_STOCK_SYNC_PARTIAL_DATE_CHANGED')
+        );
+
+        /** @var StockQuantityUpdaterInterface $partialQuantityUpdater Применитель с одним ожидаемым отказом. */
+        $partialQuantityUpdater = new class($diagnosticStoreId) implements StockQuantityUpdaterInterface {
+            /** Число вызовов для единственного отказа на первой запчасти. */
+            private int $calls = 0;
+
+            /** ID склада для полных данных последующих успешных результатов. */
+            private int $storeId;
+
+            /** Сохраняет положительный настроенный ID склада. */
+            public function __construct(int $storeId)
+            {
+                $this->storeId = $storeId;
+            }
+
+            /** На первом вызове возвращает Result с ошибкой, затем имитирует успешное применение. */
+            public function apply(
+                StockItem $item,
+                int $absoluteQuantity,
+                ?\Closure $transactionalSuccessCallback = null
+            ): Result {
+                $this->calls++;
+                /** @var Result $result Предсказуемый результат применения для диагностического сценария. */
+                $result = new Result();
+                if ($this->calls === 1) {
+                    $result->addError(
+                        new Error(
+                            (string)Loc::getMessage(
+                                'OTUS_AUTOSERVICE_CHECK_STOCK_SYNC_EXPECTED_APPLY_ERROR'
+                            ),
+                            StockQuantityService::ERROR_API_FAILED
+                        )
+                    );
+
+                    return $result;
+                }
+
+                $result->setData(
+                    [
+                        'store_id' => $this->storeId,
+                        'mode' => StockQuantityService::MODE_DIRECT_API,
+                        'previous_store_quantity' => 0.0,
+                        'applied_store_quantity' => (float)$absoluteQuantity,
+                        'previous_product_quantity' => 0.0,
+                        'applied_product_quantity' => (float)$absoluteQuantity,
+                        'document_id' => null,
+                    ]
+                );
+                if ($transactionalSuccessCallback !== null) {
+                    $transactionalSuccessCallback($result);
+                }
+
+                return $result;
+            }
+        };
+        /** @var StockSyncService $applyPartialService Сервис для проверки продолжения после отказа применителя. */
+        $applyPartialService = new StockSyncService(
+            new StockProviderFactory([$successProvider]),
+            $repository,
+            $partialQuantityUpdater
+        );
+        /** @var int $applyPartialRunId ID запуска с одной ошибкой применения остатка. */
+        $applyPartialRunId = $applyPartialService->run(
+            SyncRunTable::INITIATOR_CLI,
+            2,
+            $successProviderCode
+        );
+        $createdRunIds[] = $applyPartialRunId;
+        assertApplyPartialRun($applyPartialRunId, count($productIds), 4);
+        assertStockSyncCondition(
+            Option::get(
+                ModuleConfiguration::MODULE_ID,
+                ModuleConfiguration::OPTION_STOCK_SYNC_LAST_SUCCESS_AT,
+                ''
+            ) === $successfulTimestamp,
+            (string)Loc::getMessage('OTUS_AUTOSERVICE_CHECK_STOCK_SYNC_PARTIAL_DATE_CHANGED')
+        );
+
+        /** @var string $contractProviderCode Код запуска с нарушенным контрактом документа. */
+        $contractProviderCode = $diagnosticProviderCodes[4];
+        /** @var StockProviderInterface $contractProvider Локальный источник для проверки контракта. */
+        $contractProvider = new class($contractProviderCode) implements StockProviderInterface {
+            /** Уникальный код диагностического запуска. */
+            private string $code;
+
+            /** Сохраняет уникальный код без обращения к сети. */
+            public function __construct(string $code)
+            {
+                $this->code = $code;
+            }
+
+            /** Возвращает код поставщика для журнала запуска. */
+            public function getCode(): string
+            {
+                return $this->code;
+            }
+
+            /** Возвращает предсказуемый абсолютный остаток. */
+            public function getCurrentQuantity(StockItem $item): int
+            {
+                return 4;
+            }
+        };
+        /** @var StockQuantityUpdaterInterface $invalidDocumentUpdater Нарушает связь режима и документа. */
+        $invalidDocumentUpdater = new class($diagnosticStoreId) implements StockQuantityUpdaterInterface {
+            /** ID склада для полного набора полей успешного Result. */
+            private int $storeId;
+
+            /** Сохраняет положительный ID настроенного склада. */
+            public function __construct(int $storeId)
+            {
+                $this->storeId = $storeId;
+            }
+
+            /** Имитирует движение складским документом, намеренно не возвращая его ID. */
+            public function apply(
+                StockItem $item,
+                int $absoluteQuantity,
+                ?\Closure $transactionalSuccessCallback = null
+            ): Result {
+                /** @var Result $result Формально успешный, но логически противоречивый результат. */
+                $result = new Result();
+                $result->setData(
+                    [
+                        'store_id' => $this->storeId,
+                        'mode' => StockQuantityService::MODE_INVENTORY_DOCUMENT,
+                        'previous_store_quantity' => 0.0,
+                        'applied_store_quantity' => (float)$absoluteQuantity,
+                        'previous_product_quantity' => 0.0,
+                        'applied_product_quantity' => (float)$absoluteQuantity,
+                        'document_id' => null,
+                    ]
+                );
+                if ($transactionalSuccessCallback !== null) {
+                    $transactionalSuccessCallback($result);
+                }
+
+                return $result;
+            }
+        };
+        /** @var bool $invalidContractCaught Нарушение контракта не превратилось в ложный успех. */
+        $invalidContractCaught = false;
+        try {
+            (new StockSyncService(
+                new StockProviderFactory([$contractProvider]),
+                $repository,
+                $invalidDocumentUpdater
+            ))->run(SyncRunTable::INITIATOR_CLI, 2, $contractProviderCode);
+        } catch (RuntimeException $exception) {
+            $invalidContractCaught = $exception->getMessage()
+                === 'Successful stock updater returned inconsistent document data.';
+        }
+        assertStockSyncCondition(
+            $invalidContractCaught
+            && SyncRunTable::getCount(
+                [
+                    '=PROVIDER_CODE' => $contractProviderCode,
+                    '=STATUS' => SyncRunTable::STATUS_FAILED,
+                ]
+            ) === 1,
+            (string)Loc::getMessage('OTUS_AUTOSERVICE_CHECK_STOCK_SYNC_CONTRACT_RUN_INVALID')
         );
 
         Option::set(
@@ -521,7 +785,8 @@ try {
         try {
             (new StockSyncService(
                 new StockProviderFactory([$crashProvider]),
-                $repository
+                $repository,
+                $fakeQuantityUpdater
             ))->run(SyncRunTable::INITIATOR_CLI, 2, $crashProviderCode);
         } catch (RuntimeException $exception) {
             $expectedCrashCaught = $exception->getMessage() === 'Expected diagnostic crash.';

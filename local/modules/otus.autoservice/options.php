@@ -11,6 +11,7 @@ use Bitrix\Main\Config\Option;
 use Bitrix\Main\Context;
 use Bitrix\Main\Loader;
 use Bitrix\Main\Localization\Loc;
+use Bitrix\Main\UserTable;
 use Otus\Autoservice\Integration\Crm\ServiceDealPipelineManager;
 use Otus\Autoservice\Service\ModuleConfiguration;
 
@@ -66,6 +67,7 @@ if ($request->isPost() && check_bitrix_sessid()) {
                 ModuleConfiguration::OPTION_ENABLED,
                 ModuleConfiguration::OPTION_LOG_LEVEL,
                 ModuleConfiguration::OPTION_STOCK_PROVIDER,
+                ModuleConfiguration::OPTION_STOCK_DOCUMENT_RESPONSIBLE_USER_ID,
             ] as $optionName
         ) {
             /** @var string $optionName Очередная пользовательская настройка для сброса. */
@@ -112,6 +114,35 @@ if ($request->isPost() && check_bitrix_sessid()) {
             );
         }
 
+        /** @var string $stockResponsibleUserIdValue ID ответственного складских документов либо пустая строка. */
+        $stockResponsibleUserIdValue = trim(
+            (string)$request->getPost(
+                ModuleConfiguration::OPTION_STOCK_DOCUMENT_RESPONSIBLE_USER_ID
+            )
+        );
+        if ($stockResponsibleUserIdValue !== '') {
+            /** @var array<string, mixed>|null $stockResponsibleUser Активный пользователь из белого списка БД. */
+            $stockResponsibleUser = preg_match('/^[1-9][0-9]*$/D', $stockResponsibleUserIdValue) === 1
+                ? UserTable::getRow(
+                    [
+                        'select' => ['ID'],
+                        'filter' => [
+                            '=ID' => (int)$stockResponsibleUserIdValue,
+                            '=ACTIVE' => 'Y',
+                        ],
+                    ]
+                )
+                : null;
+            if (
+                $stockResponsibleUser === null
+                || (string)(int)$stockResponsibleUser['ID'] !== $stockResponsibleUserIdValue
+            ) {
+                $optionErrors[] = (string)Loc::getMessage(
+                    'OTUS_AUTOSERVICE_OPTIONS_STOCK_RESPONSIBLE_INVALID'
+                );
+            }
+        }
+
         /** @var string $categoryIdValue ID выбранного направления либо пустая строка. */
         $categoryIdValue = trim(
             (string)$request->getPost(ModuleConfiguration::OPTION_SERVICE_DEAL_CATEGORY_ID)
@@ -137,6 +168,19 @@ if ($request->isPost() && check_bitrix_sessid()) {
                 ModuleConfiguration::OPTION_STOCK_PROVIDER,
                 $stockProviderCode
             );
+
+            if ($stockResponsibleUserIdValue === '') {
+                Option::delete(
+                    $moduleId,
+                    ['name' => ModuleConfiguration::OPTION_STOCK_DOCUMENT_RESPONSIBLE_USER_ID]
+                );
+            } else {
+                Option::set(
+                    $moduleId,
+                    ModuleConfiguration::OPTION_STOCK_DOCUMENT_RESPONSIBLE_USER_ID,
+                    $stockResponsibleUserIdValue
+                );
+            }
 
             if ($categoryIdValue === '') {
                 Option::delete(
@@ -187,6 +231,9 @@ $logLevel = ModuleConfiguration::getLogLevel();
 
 /** @var string $stockProviderCode Текущий проверенный код источника внешних остатков. */
 $stockProviderCode = ModuleConfiguration::getStockProviderCode();
+
+/** @var int|null $stockResponsibleUserId Ответственный складских документов для cron. */
+$stockResponsibleUserId = ModuleConfiguration::getStockDocumentResponsibleUserId();
 
 /** @var int|null $serviceCategoryId Выбранное направление сервисного обслуживания. */
 $serviceCategoryId = ModuleConfiguration::getServiceDealCategoryId();
@@ -266,6 +313,32 @@ $dealCarFieldName = ModuleConfiguration::getDealCarFieldName();
             <div class="adm-info-message-wrap">
                 <?=htmlspecialcharsbx((string)Loc::getMessage(
                     'OTUS_AUTOSERVICE_OPTIONS_STOCK_PROVIDER_HELP'
+                ))?>
+            </div>
+        </td>
+    </tr>
+    <tr>
+        <td width="40%">
+            <label for="otus-autoservice-stock-responsible-user-id">
+                <?=htmlspecialcharsbx((string)Loc::getMessage(
+                    'OTUS_AUTOSERVICE_OPTIONS_STOCK_RESPONSIBLE'
+                ))?>
+            </label>
+        </td>
+        <td width="60%">
+            <input
+                id="otus-autoservice-stock-responsible-user-id"
+                type="number"
+                min="1"
+                step="1"
+                name="<?=htmlspecialcharsbx(
+                    ModuleConfiguration::OPTION_STOCK_DOCUMENT_RESPONSIBLE_USER_ID
+                )?>"
+                value="<?=$stockResponsibleUserId === null ? '' : $stockResponsibleUserId?>"
+            >
+            <div class="adm-info-message-wrap">
+                <?=htmlspecialcharsbx((string)Loc::getMessage(
+                    'OTUS_AUTOSERVICE_OPTIONS_STOCK_RESPONSIBLE_HELP'
                 ))?>
             </div>
         </td>

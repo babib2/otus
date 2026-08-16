@@ -12,6 +12,7 @@ use Bitrix\Main\Localization\Loc;
 use Bitrix\Main\ORM\Data\DataManager;
 use Bitrix\Main\ORM\Fields\BooleanField;
 use Bitrix\Main\ORM\Fields\DatetimeField;
+use Bitrix\Main\ORM\Fields\FloatField;
 use Bitrix\Main\ORM\Fields\IntegerField;
 use Bitrix\Main\ORM\Fields\StringField;
 use Bitrix\Main\ORM\Fields\TextField;
@@ -22,11 +23,11 @@ use Bitrix\Main\Type\DateTime;
 Loc::loadMessages(__FILE__);
 
 /**
- * Хранит внешний абсолютный остаток либо безопасную ошибку одного товара.
+ * Хранит внешний абсолютный остаток, фактическое применение либо безопасную ошибку товара.
  */
 final class SyncItemTable extends DataManager
 {
-    /** Внешний остаток товара успешно получен и сохранён в журнале. */
+    /** Внешний остаток товара успешно получен, применён и подтверждён контрольным чтением. */
     public const STATUS_SUCCESS = 'success';
 
     /** Получение или проверка идентификаторов товара завершились ошибкой. */
@@ -49,7 +50,7 @@ final class SyncItemTable extends DataManager
     }
 
     /**
-     * Описывает связь с запуском, идентификаторы товара, количество и ошибку.
+     * Описывает связь с запуском, идентификаторы, количества до/после, документ и ошибку.
      *
      * EXTERNAL_ID и ARTICLE допускают null, чтобы журналировать повреждённую
      * запчасть, у которой отсутствует один из обязательных идентификаторов.
@@ -102,6 +103,44 @@ final class SyncItemTable extends DataManager
                 ->configureTitle(Loc::getMessage('OTUS_AUTOSERVICE_SYNC_ITEM_FIELD_EXTERNAL_QUANTITY'))
                 ->configureNullable()
                 ->addValidator(new RangeValidator(0)),
+
+            (new IntegerField('STORE_ID'))
+                ->configureTitle(Loc::getMessage('OTUS_AUTOSERVICE_SYNC_ITEM_FIELD_STORE_ID'))
+                ->configureNullable(),
+
+            (new StringField('APPLY_MODE'))
+                ->configureTitle(Loc::getMessage('OTUS_AUTOSERVICE_SYNC_ITEM_FIELD_APPLY_MODE'))
+                ->configureNullable()
+                ->configureSize(32)
+                ->addValidator(new LengthValidator(null, 32)),
+
+            (new FloatField('PREVIOUS_STORE_QUANTITY'))
+                ->configureTitle(
+                    Loc::getMessage('OTUS_AUTOSERVICE_SYNC_ITEM_FIELD_PREVIOUS_STORE_QUANTITY')
+                )
+                ->configureNullable(),
+
+            (new FloatField('APPLIED_STORE_QUANTITY'))
+                ->configureTitle(
+                    Loc::getMessage('OTUS_AUTOSERVICE_SYNC_ITEM_FIELD_APPLIED_STORE_QUANTITY')
+                )
+                ->configureNullable(),
+
+            (new FloatField('PREVIOUS_PRODUCT_QUANTITY'))
+                ->configureTitle(
+                    Loc::getMessage('OTUS_AUTOSERVICE_SYNC_ITEM_FIELD_PREVIOUS_PRODUCT_QUANTITY')
+                )
+                ->configureNullable(),
+
+            (new FloatField('APPLIED_PRODUCT_QUANTITY'))
+                ->configureTitle(
+                    Loc::getMessage('OTUS_AUTOSERVICE_SYNC_ITEM_FIELD_APPLIED_PRODUCT_QUANTITY')
+                )
+                ->configureNullable(),
+
+            (new IntegerField('DOCUMENT_ID'))
+                ->configureTitle(Loc::getMessage('OTUS_AUTOSERVICE_SYNC_ITEM_FIELD_DOCUMENT_ID'))
+                ->configureNullable(),
 
             (new StringField('ERROR_TYPE'))
                 ->configureTitle(Loc::getMessage('OTUS_AUTOSERVICE_SYNC_ITEM_FIELD_ERROR_TYPE'))

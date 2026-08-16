@@ -15,3 +15,4 @@ $MESS['OTUS_AUTOSERVICE_STOCK_SYNC_INVALID_ITEM'] = 'У запчасти отс�
 $MESS['OTUS_AUTOSERVICE_STOCK_SYNC_STALE_ERROR'] = 'Запуск помечен ошибочным: heartbeat не обновлялся дольше допустимого времени.';
 $MESS['OTUS_AUTOSERVICE_STOCK_SYNC_GENERAL_ERROR'] = 'Запуск прерван общей ошибкой. Подробности доступны в выводе запуска и системной диагностике.';
 $MESS['OTUS_AUTOSERVICE_STOCK_SYNC_ORM_ERROR'] = 'Не удалось сохранить журнал синхронизации.';
+$MESS['OTUS_AUTOSERVICE_STOCK_SYNC_APPLY_ERROR'] = 'Не удалось применить абсолютный остаток к каталогу.';

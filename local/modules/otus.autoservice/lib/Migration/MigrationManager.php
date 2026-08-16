@@ -38,6 +38,7 @@ final class MigrationManager
         Version202608090007RegisterCarRestApi::class,
         Version202608090008CreateSparePartsCatalog::class,
         Version202608110009CreateStockSyncTables::class,
+        Version202608110010ExtendStockSyncItems::class,
     ];
 
     /**
